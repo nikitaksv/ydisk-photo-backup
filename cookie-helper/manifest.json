@@ -1,0 +1,9 @@
+{
+ "manifest_version":3,
+ "name":"Photoslice — экспорт cookies",
+ "version":"1.0.0",
+ "description":"Сохраняет cookies Яндекса локально в cookies.json для резервной копии Photoslice. Ничего не отправляет по сети.",
+ "permissions":["cookies","downloads"],
+ "host_permissions":["https://*.yandex.ru/*","https://*.yandex.com/*"],
+ "action":{"default_popup":"popup.html","default_title":"Экспорт cookies для Photoslice"}
+}
