@@ -9,6 +9,13 @@ import (
 )
 
 func (c *Client) processBatch(ctx context.Context, s *Store, resources []Resource, log func(string)) error {
+	if e := c.processBatchStage(ctx, s, resources, "previews", log); e != nil {
+		return e
+	}
+	return c.processBatchStage(ctx, s, resources, "originals", log)
+}
+
+func (c *Client) processBatchStage(ctx context.Context, s *Store, resources []Resource, stage string, log func(string)) error {
 	if c.FreshLinks != nil {
 		var e error
 		resources, e = c.FreshLinks.refresh(ctx, c, s, resources)
@@ -16,13 +23,19 @@ func (c *Client) processBatch(ctx context.Context, s *Store, resources []Resourc
 			return e
 		}
 	}
-	_, cleanup, e := c.prefetch(ctx, s, resources)
-	defer cleanup()
-	if e != nil {
-		if fatal(e) {
-			return e
+	if stage == "originals" {
+		_, cleanup, e := c.prefetch(ctx, s, resources)
+		defer cleanup()
+		if e != nil {
+			if fatal(e) {
+				return e
+			}
+			log("Пакетный оригинал не получен; проверяю файлы отдельно.")
 		}
-		log("Пакетный оригинал не получен; проверяю файлы отдельно.")
+	}
+	qualities := []string{"original"}
+	if stage == "previews" {
+		qualities = []string{"preview", "thumbnail"}
 	}
 	for _, r := range resources {
 		if e := ctx.Err(); e != nil {
@@ -34,7 +47,14 @@ func (c *Client) processBatch(ctx context.Context, s *Store, resources []Resourc
 		}
 		r.FailedURLs = make(map[string]error)
 		var last error
-		for _, quality := range []string{"original", "preview", "thumbnail"} {
+		for _, quality := range qualities {
+			// A thumbnail is a fallback copy, never extra work after a preview
+			// or an already saved original. Existing thumbnails are retained.
+			_, hasPreview := present["preview"]
+			_, hasOriginal := present["original"]
+			if quality == "thumbnail" && (hasPreview || hasOriginal) {
+				continue
+			}
 			if _, ok := present[quality]; ok {
 				continue
 			}
@@ -68,7 +88,9 @@ func (c *Client) processBatch(ctx context.Context, s *Store, resources []Resourc
 			}
 			log(fmt.Sprintf("Сохранён: %s · %s · %.1f МБ", safeName(r.Name), result.Quality, float64(result.Bytes)/1e6))
 		}
-		if len(present) == 0 && last != nil {
+		// During the preview pass an original has not been attempted yet.
+		// Keep a copyless file pending until that second pass determines its result.
+		if stage == "originals" && len(present) == 0 && last != nil {
 			if e := s.failed(r.ID, last); e != nil {
 				return e
 			}

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestZIPMode429FallsBackAndPreservesEveryQuality(t *testing.T) {
+func TestZIPMode429FallsBackAfterPreviewsWithoutExtraThumbnails(t *testing.T) {
 	s := testStore(t)
 	s.set("inventory", "complete")
 	original := picture(800, 600)
@@ -49,7 +49,7 @@ func TestZIPMode429FallsBackAndPreservesEveryQuality(t *testing.T) {
 		t.Fatal(e)
 	}
 	st, _ := s.stats()
-	if st.Done != 1 || st.Original != 1 || st.Preview != 1 || st.Thumbnail != 1 || st.Failed != 0 || prepares.Load() != 1 {
+	if st.Done != 1 || st.Original != 1 || st.Preview != 1 || st.Thumbnail != 0 || st.Failed != 0 || prepares.Load() != 1 {
 		t.Fatal(st, prepares.Load())
 	}
 	var count int

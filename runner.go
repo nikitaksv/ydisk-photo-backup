@@ -155,11 +155,6 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 	if e := verifyVersions(ctx, s, false, log); e != nil {
 		return e
 	}
-	if c.BatchOriginals {
-		if e := recoverOriginalZIP(ctx, s, log); e != nil {
-			return e
-		}
-	}
 	var collectErr error
 	if mode == "resume" || strings.HasPrefix(mode, "zip") {
 		log("Продолжаю по сохранённому списку; повторного обхода Photoslice нет.")
@@ -183,6 +178,21 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 		}
 		log("Ошибка обновления списка: " + collectErr.Error())
 	}
+	// The whole preview pass must finish before any original request, even
+	// when a fast worker has run out of previews or a saved ZIP queue is full.
+	if mode != "zip-test" {
+		if e := runDownloadStage(ctx, s, c, workers, "previews", log); e != nil {
+			return e
+		}
+	}
+	c.mu.Lock()
+	c.downloadStage = "originals"
+	c.mu.Unlock()
+	if c.BatchOriginals {
+		if e := recoverOriginalZIP(ctx, s, log); e != nil {
+			return e
+		}
+	}
 	if strings.HasPrefix(mode, "zip") {
 		e := runZIPPass(ctx, s, c, log)
 		if mode == "zip-test" || fatal(e) {
@@ -195,11 +205,71 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 			return nil
 		}
 	}
-	where := "(SELECT COUNT(*) FROM versions WHERE file_id=files.id)<3"
-	queue, e := s.downloadQueue(where)
+	if e := runDownloadStage(ctx, s, c, workers, "originals", log); e != nil {
+		return e
+	}
+	if e := s.report(); e != nil {
+		return e
+	}
+	st, e := s.stats()
 	if e != nil {
 		return e
 	}
+	log(fmt.Sprintf("Файлы: %d / %d; версии: %d; без оригиналов: %d; без копии: %d", st.Done, st.Total, st.Archives, st.NoOriginal, st.Total-st.Done))
+	if collectErr != nil {
+		return collectErr
+	}
+	if (mode == "resume" || mode == "zip") && st.Inventory != "complete" {
+		return fmt.Errorf("проход по сохранённому списку завершён; полнота списка не подтверждена")
+	}
+	if st.Failed+st.Pending > 0 {
+		return fmt.Errorf("частичный архив: %d файлов без копии; подробности в отчёте", st.Total-st.Done)
+	}
+	return nil
+}
+
+func runDownloadStage(ctx context.Context, s *Store, c *Client, workers int, stage string, log func(string)) error {
+	c.mu.Lock()
+	c.downloadStage = stage
+	c.mu.Unlock()
+	quality, label := "original", "Оригиналы"
+	if stage == "previews" {
+		quality, label = "preview", "Превью"
+	}
+	where := "NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id AND quality='" + quality + "')"
+	seen := make(map[string]bool)
+	for {
+		queue, e := s.downloadQueue(where)
+		if e != nil {
+			return e
+		}
+		pending := queue[:0]
+		for _, item := range queue {
+			if !seen[item.ID] {
+				seen[item.ID] = true
+				pending = append(pending, item)
+			}
+		}
+		if len(pending) == 0 {
+			break
+		}
+		if e := runDownloadQueue(ctx, s, c, workers, stage, label, pending, log); e != nil {
+			return e
+		}
+		// Cluster refresh may discover files absent from the starting queue.
+		// Attempt their previews too; failures are not retried within this pass.
+		if stage != "previews" {
+			break
+		}
+	}
+	if e := ctx.Err(); e != nil {
+		return e
+	}
+	log(label + ": проход по известным файлам завершён.")
+	return nil
+}
+
+func runDownloadQueue(ctx context.Context, s *Store, c *Client, workers int, stage, label string, queue []downloadItem, log func(string)) error {
 	photos, videos := 0, 0
 	for _, item := range queue {
 		if item.Video {
@@ -208,7 +278,7 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 			photos++
 		}
 	}
-	log(fmt.Sprintf("Очередь: сначала фотографии (%d), затем видео (%d); загрузок: %d", photos, videos, workers))
+	log(fmt.Sprintf("%s: сначала фотографии (%d), затем видео (%d); загрузок: %d", label, photos, videos, workers))
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	jobs := make(chan []Resource, workers)
@@ -233,12 +303,12 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 					batches.Done()
 					continue
 				}
-				if e := c.processBatch(workCtx, s, batch, log); e != nil {
+				if e := c.processBatchStage(workCtx, s, batch, stage, log); e != nil {
 					if !errors.Is(e, context.Canceled) {
 						fail(e)
 					}
 				}
-				if workCtx.Err() == nil && c.BatchOriginals {
+				if workCtx.Err() == nil && c.BatchOriginals && stage == "originals" {
 					if e := c.drainOriginalZIP(workCtx, s, false, false, log); fatal(e) {
 						fail(e)
 					}
@@ -288,14 +358,14 @@ send:
 			if workCtx.Err() != nil {
 				break send
 			}
-			if c.BatchOriginals {
+			if c.BatchOriginals && stage == "originals" {
 				if e := c.drainOriginalZIP(workCtx, s, true, false, log); fatal(e) {
 					fail(e)
 					break send
 				}
 			}
 			videoPhase = true
-			log("Проверка версий фотографий завершена. Перехожу к видео.")
+			log(label + " фотографий проверены. Перехожу к видео.")
 		}
 		r, e := s.load(item.ID)
 		if e != nil {
@@ -341,7 +411,7 @@ send:
 	}
 	close(jobs)
 	wg.Wait()
-	if workCtx.Err() == nil && c.BatchOriginals {
+	if workCtx.Err() == nil && c.BatchOriginals && stage == "originals" {
 		if e := c.drainOriginalZIP(workCtx, s, true, false, log); fatal(e) {
 			return e
 		}
@@ -349,28 +419,11 @@ send:
 			return e
 		}
 	}
-	if e := s.report(); e != nil {
-		return e
-	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	if firstErr != nil {
 		return firstErr
-	}
-	st, e := s.stats()
-	if e != nil {
-		return e
-	}
-	log(fmt.Sprintf("Файлы: %d / %d; версии: %d; без оригиналов: %d; без копии: %d", st.Done, st.Total, st.Archives, st.NoOriginal, st.Total-st.Done))
-	if collectErr != nil {
-		return collectErr
-	}
-	if (mode == "resume" || mode == "zip") && st.Inventory != "complete" {
-		return fmt.Errorf("проход по сохранённому списку завершён; полнота списка не подтверждена")
-	}
-	if st.Failed+st.Pending > 0 {
-		return fmt.Errorf("частичный архив: %d файлов без копии; подробности в отчёте", st.Total-st.Done)
 	}
 	return nil
 }

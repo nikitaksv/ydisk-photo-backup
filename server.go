@@ -21,7 +21,7 @@ import (
 //go:embed ui/*
 var ui embed.FS
 
-const buildVersion = "2026-10-11.tui.2"
+const buildVersion = "2026-10-12.preview-first.1"
 
 type Job struct {
 	mu             sync.Mutex
@@ -183,10 +183,10 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 					job.watching = false
 					s.set("watch_enabled", "false")
 					job.message += " Фоновая проверка приостановлена; устрани причину и включи её снова."
-				} else if mode != "check" && st.Total > 0 && st.NoOriginal == 0 && st.NoPreview == 0 && st.NoThumbnail == 0 {
+				} else if mode != "check" && st.Total > 0 && st.NoOriginal == 0 && st.NoPreview == 0 {
 					job.watching = false
 					s.set("watch_enabled", "false")
-					job.message += " Все три версии получены; периодическая проверка завершена."
+					job.message += " Все оригиналы и превью получены; периодическая проверка завершена."
 				} else {
 					job.next = time.Now().Add(job.interval)
 					s.set("watch_next", job.next.Format(time.RFC3339))
@@ -211,18 +211,25 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		rate := RateStatus{}
+		stage := ""
 		if job.client != nil {
 			rate = job.client.rateStatus()
+			job.client.mu.Lock()
+			stage = job.client.downloadStage
+			job.client.mu.Unlock()
 		}
 		phase, message := job.phase, job.message
 		if phase == "zipping" && (zipProgress.Stage == "completed" || zipProgress.Stage == "deferred") {
 			phase = "running"
 		}
+		if job.running && stage != "" {
+			phase = stage
+		}
 		if job.running && rate.LimitedUntil != "" {
 			phase = "rate_limited"
 			message = "Яндекс ограничил запросы. Все новые запросы ждут общей паузы; файлы остаются в очереди."
 		}
-		writeJSON(w, Object{"build": buildVersion, "transfer": transfer, "storage": storage, "zip": zipProgress, "rate": rate, "stats": st, "running": job.running, "phase": phase, "message": message, "logs": job.logs, "out": s.Root, "cookies": ce == nil, "token": token, "watching": job.watching, "watch_interval_minutes": int(job.interval / time.Minute), "next_check": job.next.Format(time.RFC3339)})
+		writeJSON(w, Object{"build": buildVersion, "download_stage": stage, "transfer": transfer, "storage": storage, "zip": zipProgress, "rate": rate, "stats": st, "running": job.running, "phase": phase, "message": message, "logs": job.logs, "out": s.Root, "cookies": ce == nil, "token": token, "watching": job.watching, "watch_interval_minutes": int(job.interval / time.Minute), "next_check": job.next.Format(time.RFC3339)})
 	})
 	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {

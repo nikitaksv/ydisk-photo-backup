@@ -14,7 +14,7 @@ let snapshot=null,token='',view='overview',offset=0,listTotal=0,lastList=0,refre
 const speedHistory=[];
 const views=['overview','files','journal','settings'];
 const pageSize=25;
-const phases={idle:'Готов к запуску',running:'Скачивание',zipping:'Пакетная загрузка ZIP',rate_limited:'Пауза Яндекса',upgrading:'Проверка качества',checking:'Проверка входа',completed:'Проход завершён',stopped:'Остановлено',attention:'Требуется внимание'};
+const phases={idle:'Готов к запуску',running:'Скачивание',previews:'Превью · первый проход',originals:'Оригиналы · второй проход',zipping:'Пакетная загрузка ZIP',rate_limited:'Пауза Яндекса',upgrading:'Проверка качества',checking:'Проверка входа',completed:'Проход завершён',stopped:'Остановлено',attention:'Требуется внимание'};
 function switchView(next,focus=false){
  if(!views.includes(next))next='overview';view=next;store('view',next);
  for(const name of views){hide('view-'+name,name!==next);const tab=$('tab-'+name);tab.setAttribute('aria-selected',String(name===next));tab.tabIndex=name===next?0:-1}
@@ -40,18 +40,19 @@ function renderSpeed(d){
  const etaStates={measuring:'Замер…',idle:'—',rate_limited:'После паузы',no_progress:'Недостаточно данных',known_complete:'Копии есть у всех'};
  const etaState=paused?'rate_limited':!d.running&&t?.eta_state!=='known_complete'?'idle':t?.eta_state;
  text('eta',etaState==='estimate'?'≈ '+duration(t.eta_seconds):etaStates[etaState]||'—');
- text('etaDetail',etaState==='estimate'?'До '+dateTime(t.finish_at)+' МСК · по найденному списку':etaState==='known_complete'?d.stats.no_original+d.stats.no_preview+d.stats.no_thumbnail?'Осталось проверить качество':'Все версии сохранены':d.running&&!paused?'Прогноз появится при устойчивом прогрессе':'');
+ text('etaDetail',etaState==='estimate'?'До '+dateTime(t.finish_at)+' МСК · по найденному списку':etaState==='known_complete'?d.stats.no_original+d.stats.no_preview?'Осталось проверить качество':'Оригиналы и превью сохранены':d.running&&!paused?'Прогноз появится при устойчивом прогрессе':'');
  if(t&&moving){speedHistory.push(Number(t.network_mb_per_second)||0);if(speedHistory.length>60)speedHistory.shift()}
  hide('history',speedHistory.length<8||!moving);
  if(speedHistory.length>=8&&moving){const peak=Math.max(...speedHistory,.01);$('sparkline').replaceChildren(...speedHistory.map(v=>{const bar=document.createElement('i');bar.style.height=Math.max(1,v/peak*25)+'px';return bar}));text('historyPeak','пик '+fmt(peak,2))}
 }
 function renderZIP(d){
- const z=d.zip||{},queued=z.queued||0,inFlight=['preparing','downloading','verifying'].includes(z.stage),deferred=z.stage==='deferred'&&queued>0;
+ const z=d.zip||{},queued=z.queued||0,previewPass=d.running&&d.download_stage==='previews',inFlight=!previewPass&&['preparing','downloading','verifying'].includes(z.stage),deferred=z.stage==='deferred'&&queued>0;
  hide('zipLine',!queued&&!inFlight&&!z.archives);
- text('zipLabel',inFlight?(z.stage==='verifying'?'Проверка ZIP':'Скачивание ZIP'):deferred?'ZIP отложен':queued?'Накопление ZIP':'ZIP сохранены');
+ text('zipLabel',previewPass?'Очередь оригиналов':inFlight?(z.stage==='verifying'?'Проверка ZIP':'Скачивание ZIP'):deferred?'ZIP отложен':queued?'Накопление ZIP':'ZIP сохранены');
  text('zipValue',inFlight?'пачка '+z.batch+' / '+z.batches:queued?fmt(queued)+(queued<500&&!deferred?' / '+(z.batch_size||500):' в очереди'):fmt(z.archives));
- hide('zipBar',!queued||inFlight||deferred);$('zipBar').max=z.batch_size||500;$('zipBar').value=Math.min(queued,z.batch_size||500);
+ hide('zipBar',previewPass||!queued||inFlight||deferred);$('zipBar').max=z.batch_size||500;$('zipBar').value=Math.min(queued,z.batch_size||500);
  let detail=deferred?(d.phase==='rate_limited'?'Очередь сохранена · после ограничения Яндекса':'Очередь сохранена · следующая фоновая проверка'):z.archives?fmt(z.imported)+' оригиналов из ZIP'+(z.missing?' · '+fmt(z.missing)+' пропусков на повторную проверку':''):queued>=500?'Пачка готова · архивы скачиваются по очереди':'';
+ if(previewPass&&queued)detail='После прохода превью всех файлов';
  text('zipDetail',detail);hide('zipDetail',!detail);
 }
 function renderJournal(){
@@ -66,7 +67,7 @@ function renderJournal(){
 }
 function render(d){
  snapshot=d;token=d.token;const s=d.stats,t=d.transfer,r=d.rate,z=d.zip,a=r?.tune;
- const active=d.running,missing=s.no_original+s.no_preview+s.no_thumbnail,paused=d.phase==='rate_limited';
+ const active=d.running,missing=s.no_original+s.no_preview,paused=d.phase==='rate_limited';
 	 document.querySelector('.primary').hidden=!s.total;document.querySelector('.overview-grid').hidden=!s.total;
 	 document.querySelectorAll('.tempo,.forecast').forEach(node=>node.hidden=!active);document.querySelector('.headline').classList.toggle('inactive',!active);hide('speedScope',!active);
  text('connection','● live');$('connection').className='connection';text('out',d.out);$('out').title=d.out;

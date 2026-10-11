@@ -70,7 +70,7 @@ func TestFilesWithNoCopyPrecedeRepeatedQualityChecks(t *testing.T) {
 	}
 }
 
-func TestVideoWaitsForAllPhotoVersionsAndCancellationReleasesBarrier(t *testing.T) {
+func TestOriginalsWaitForAllPreviewsAndCancellationReleasesBarrier(t *testing.T) {
 	for _, cancelRun := range []bool{false, true} {
 		name := "complete"
 		if cancelRun {
@@ -88,6 +88,14 @@ func TestVideoWaitsForAllPhotoVersionsAndCancellationReleasesBarrier(t *testing.
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			t.Cleanup(unblock)
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/disk/") {
+					for _, id := range []string{"slow", "fast", "video"} {
+						versions, e := s.versions(id)
+						if e != nil || versions["preview"].ID == "" {
+							t.Errorf("original started before preview %s was committed: %v", id, e)
+						}
+					}
+				}
 				switch r.URL.Path {
 				case "/client/disk":
 					w.Write([]byte(`{"sk":"test-sk","uid":"1234"}`))
@@ -103,7 +111,7 @@ func TestVideoWaitsForAllPhotoVersionsAndCancellationReleasesBarrier(t *testing.
 					videoStarted <- struct{}{}
 					for _, id := range []string{"slow", "fast"} {
 						versions, e := s.versions(id)
-						if e != nil || len(versions) != 3 {
+						if e != nil || len(versions) != 2 {
 							t.Errorf("video started before %s finished: %d versions, %v", id, len(versions), e)
 						}
 					}
@@ -111,7 +119,7 @@ func TestVideoWaitsForAllPhotoVersionsAndCancellationReleasesBarrier(t *testing.
 				w.Write(data)
 			}))
 			t.Cleanup(server.Close)
-			c := &Client{HTTP: server.Client(), Base: server.URL, Batch: 1}
+			c := &Client{HTTP: server.Client(), Base: server.URL, Batch: 1, BatchOriginals: true}
 			for _, id := range []string{"slow", "fast", "video"} {
 				fileName := id + ".jpg"
 				if id == "video" {
@@ -128,13 +136,18 @@ func TestVideoWaitsForAllPhotoVersionsAndCancellationReleasesBarrier(t *testing.
 				if e := s.save(r); e != nil {
 					t.Fatal(e)
 				}
+				if id != "video" {
+					if e := s.queueOriginalZIP(id); e != nil {
+						t.Fatal(e)
+					}
+				}
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
 				done <- runInventory(ctx, s, c, 2, "resume", func(msg string) {
-					if strings.Contains(msg, "fast.jpg · thumbnail") {
+					if strings.Contains(msg, "fast.jpg · preview") {
 						fastOnce.Do(func() { close(fastDone) })
 					}
 				})

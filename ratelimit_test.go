@@ -136,7 +136,7 @@ func TestCancelDuring429LeavesFilePending(t *testing.T) {
 	s.save(r)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- c.processBatch(ctx, s, []Resource{r}, func(string) {}) }()
+	go func() { done <- c.processBatchStage(ctx, s, []Resource{r}, "originals", func(string) {}) }()
 	deadline := time.Now().Add(time.Second)
 	for c.rateStatus().Events == 0 {
 		if time.Now().After(deadline) {

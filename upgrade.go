@@ -8,7 +8,7 @@ import (
 )
 
 func (c *Client) refreshKnown(ctx context.Context, s *Store, log func(string)) error {
-	rows, e := s.DB.Query(`SELECT DISTINCT cluster FROM files f WHERE (SELECT COUNT(*) FROM versions WHERE file_id=f.id)<3`)
+	rows, e := s.DB.Query(`SELECT DISTINCT cluster FROM files f WHERE NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original') OR NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='preview')`)
 	if e != nil {
 		return e
 	}
@@ -56,7 +56,7 @@ func (c *Client) refreshKnown(ctx context.Context, s *Store, log func(string)) e
 }
 func watchBackup(ctx context.Context, s *Store, cookies string, workers int, interval time.Duration, log func(string)) error {
 	for {
-		log("Фоновая проверка недостающих оригиналов…")
+		log("Фоновая проверка: сначала недостающие превью, затем оригиналы…")
 		e := runMode(ctx, s, cookies, workers, true, log)
 		if e != nil {
 			if fatal(e) {
@@ -68,8 +68,8 @@ func watchBackup(ctx context.Context, s *Store, cookies string, workers int, int
 		if se != nil {
 			return se
 		}
-		if st.NoOriginal == 0 && st.NoPreview == 0 && st.NoThumbnail == 0 {
-			log("Все известные файлы имеют три версии; проверка завершена.")
+		if st.NoOriginal == 0 && st.NoPreview == 0 {
+			log("Все известные файлы имеют оригиналы и превью; проверка завершена.")
 			return nil
 		}
 		log("Следующая проверка: " + time.Now().Add(interval).Format(time.RFC3339))

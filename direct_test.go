@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestDirectOriginalSkipsZIPPreparationAndPreservesAllVersions(t *testing.T) {
+func TestDirectOriginalSkipsZIPPreparationAfterPreview(t *testing.T) {
 	original, preview, thumb := picture(900, 600), picture(700, 500), picture(150, 100)
 	h := md5.Sum(original)
 	c := apiFixture(t, func(Object, string) Object { t.Error("unexpected ZIP preparation"); return nil }, map[string][]byte{"/disk/direct": original, "/preview/large": preview, "/preview/small": thumb}, nil)
@@ -19,7 +19,7 @@ func TestDirectOriginalSkipsZIPPreparationAndPreservesAllVersions(t *testing.T) 
 		t.Fatal(e)
 	}
 	versions, e := s.versions(r.ID)
-	if e != nil || len(versions) != 3 || versions["original"].MD5 != r.MD5 {
+	if e != nil || len(versions) != 2 || versions["preview"].ID == "" || versions["original"].MD5 != r.MD5 {
 		t.Fatal(versions, e)
 	}
 }

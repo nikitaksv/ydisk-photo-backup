@@ -38,6 +38,7 @@ type Cookie struct {
 	HostOnly   bool    `json:"hostOnly"`
 }
 type Client struct {
+	downloadStage      string // guarded by mu; stage changes only after all workers finish
 	BatchOriginals     bool
 	FreshLinks         *linkRefresher
 	zipFallbackMu      sync.Mutex
