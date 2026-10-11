@@ -13,6 +13,20 @@ var diagnosticCodeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:-]{0,79}$`)
 var diagnosticMethodRE = regexp.MustCompile(`^(mpfs|intapi)/[a-z][a-z0-9-]{0,79}$`)
 var scriptSourceRE = regexp.MustCompile(`(?i)<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']`)
 
+func isZIPPrepareURL(uri string) bool {
+	u, e := url.Parse(uri)
+	return e == nil && u.Path == "/models-v2" && u.Query().Get("m") == "mpfs/bulk-download-prepare"
+}
+
+func archiveDownloadDisabled(body []byte) bool {
+	d, e := decodeJSON(body)
+	if e != nil {
+		return false
+	}
+	err := obj(d["error"])
+	return str(err["type"]) == "mpfs" && num(err["code"]) == 394
+}
+
 // Never log response messages, identifiers, arbitrary headers or signed URLs.
 func rateDiagnostic(uri, retryAfter string, body []byte) string {
 	operation := "media"

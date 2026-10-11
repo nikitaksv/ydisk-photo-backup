@@ -78,6 +78,13 @@ func (c *Client) original(ctx context.Context, r Resource, dir string) (string, 
 	return c.originalDigest(ctx, r, dir, nil)
 }
 func (c *Client) originalDigest(ctx context.Context, r Resource, dir string, digest *Digest) (string, error) {
+	if c.WebDAVToken != "" && !c.webDAVRejected.Load() {
+		if file, e := c.webDAVOriginal(ctx, r, dir, digest); e == nil {
+			return file, nil
+		} else if fatal(e) {
+			return "", e
+		}
+	}
 	if candidates := directOriginalCandidates(r); len(candidates) > 0 {
 		var last error
 		for _, candidate := range candidates {

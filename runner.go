@@ -76,6 +76,12 @@ func runSelected(ctx context.Context, s *Store, cookies string, workers int, mod
 		return e
 	}
 	defer c.HTTP.CloseIdleConnections()
+	if e := c.loadWebDAVToken(filepath.Join(s.Root, "oauth-token.txt")); e != nil {
+		return e
+	}
+	if c.WebDAVToken != "" {
+		log("Оригиналы: прямой WebDAV GET с OAuth, как в Android; затем доступные веб-ссылки.")
+	}
 	c.BatchOriginals = true
 	c.FreshLinks = newLinkRefresher()
 	c.zipFallbackStart = time.Now().UnixNano()

@@ -46,13 +46,14 @@ function renderSpeed(d){
  if(speedHistory.length>=8&&moving){const peak=Math.max(...speedHistory,.01);$('sparkline').replaceChildren(...speedHistory.map(v=>{const bar=document.createElement('i');bar.style.height=Math.max(1,v/peak*25)+'px';return bar}));text('historyPeak','пик '+fmt(peak,2))}
 }
 function renderZIP(d){
- const z=d.zip||{},queued=z.queued||0,previewPass=d.running&&d.download_stage==='previews',inFlight=!previewPass&&['preparing','downloading','verifying'].includes(z.stage),deferred=z.stage==='deferred'&&queued>0;
+ const z=d.zip||{},queued=z.queued||0,unavailable=z.stage==='unavailable',previewPass=d.running&&d.download_stage==='previews',inFlight=!previewPass&&['preparing','downloading','verifying'].includes(z.stage),deferred=z.stage==='deferred'&&queued>0;
  hide('zipLine',!queued&&!inFlight&&!z.archives);
- text('zipLabel',previewPass?'Очередь оригиналов':inFlight?(z.stage==='verifying'?'Проверка ZIP':'Скачивание ZIP'):deferred?'ZIP отложен':queued?'Накопление ZIP':'ZIP сохранены');
+ text('zipLabel',previewPass?'Очередь оригиналов':unavailable?'Серверный ZIP отключён':inFlight?(z.stage==='verifying'?'Проверка ZIP':'Скачивание ZIP'):deferred?'ZIP отложен':queued?'Накопление ZIP':'ZIP сохранены');
  text('zipValue',inFlight?'пачка '+z.batch+' / '+z.batches:queued?fmt(queued)+(queued<500&&!deferred?' / '+(z.batch_size||500):' в очереди'):fmt(z.archives));
- hide('zipBar',previewPass||!queued||inFlight||deferred);$('zipBar').max=z.batch_size||500;$('zipBar').value=Math.min(queued,z.batch_size||500);
+ hide('zipBar',unavailable||previewPass||!queued||inFlight||deferred);$('zipBar').max=z.batch_size||500;$('zipBar').value=Math.min(queued,z.batch_size||500);
  let detail=deferred?(d.phase==='rate_limited'?'Очередь сохранена · после ограничения Яндекса':'Очередь сохранена · следующая фоновая проверка'):z.archives?fmt(z.imported)+' оригиналов из ZIP'+(z.missing?' · '+fmt(z.missing)+' пропусков на повторную проверку':''):queued>=500?'Пачка готова · архивы скачиваются по очереди':'';
  if(previewPass&&queued)detail='После прохода превью всех файлов';
+ if(unavailable)detail='Яндекс: MPFS 394 · оригиналы загружаются отдельно';
  text('zipDetail',detail);hide('zipDetail',!detail);
 }
 function renderJournal(){

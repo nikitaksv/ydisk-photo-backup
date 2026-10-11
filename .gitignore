@@ -3,6 +3,10 @@
 .env.*
 *[Cc]ookie*.json
 *[Cc]ookie*.txt
+oauth*.json
+oauth*.txt
+*token*.json
+*token*.txt
 *credentials*
 *secrets*
 *.pem

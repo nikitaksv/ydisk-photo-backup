@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,6 +124,15 @@ func (c *Client) drainOriginalZIP(ctx context.Context, s *Store, flush, video bo
 	if c.zipFallbackStopped {
 		return nil
 	}
+	if s.zipDisabledUntil().After(time.Now()) {
+		c.zipFallbackStopped = true
+		status := s.zipStatus()
+		status.Stage, status.Error = "unavailable", errZIPDisabled.Error()
+		if e := s.saveZIPStatus(status); e != nil {
+			return e
+		}
+		return errZIPDisabled
+	}
 	if c.zipFallbackStart == 0 {
 		c.zipFallbackStart = time.Now().UnixNano()
 	}
@@ -180,6 +190,9 @@ func (c *Client) drainOriginalZIP(ctx context.Context, s *Store, flush, video bo
 		if e != nil {
 			c.zipFallbackStopped = true
 			status.Stage, status.Error = "deferred", e.Error()
+			if errors.Is(e, errZIPDisabled) {
+				status.Stage = "unavailable"
+			}
 			status.Seconds += time.Since(started).Seconds()
 			if se := s.saveZIPStatus(status); se != nil {
 				return se

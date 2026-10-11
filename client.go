@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,9 @@ type Cookie struct {
 	HostOnly   bool    `json:"hostOnly"`
 }
 type Client struct {
+	WebDAVToken        string // loaded from a local file; never exposed in status or logs
+	WebDAVBase         string
+	webDAVRejected     atomic.Bool
 	downloadStage      string // guarded by mu; stage changes only after all workers finish
 	BatchOriginals     bool
 	FreshLinks         *linkRefresher
@@ -203,14 +207,30 @@ func (c *Client) request(ctx context.Context, method, uri string, body []byte) (
 		}
 		// Rate limits are scheduling events. They never exhaust a file's
 		// retry budget and never trigger a lower quality fallback.
+		var diagnosticBody []byte
+		// MPFS uses HTTP 429 / code 394 for "archive download disabled".
+		// Inspect only this API method; CDN and other 429 responses still
+		// establish the shared cooldown before reading an error body.
+		if isZIPPrepareURL(uri) {
+			diagnosticBody, _ = io.ReadAll(io.LimitReader(res.Body, 4096))
+			if archiveDownloadDisabled(diagnosticBody) {
+				res.Body.Close()
+				if c.Log != nil {
+					c.Log("Серверный ZIP недоступен: MPFS 394 · скачивание архивов отключено Яндексом. Это не ограничение RPS; отдельные загрузки продолжаются.")
+				}
+				return nil, errZIPDisabled
+			}
+		}
 		retryAfter := res.Header.Get("Retry-After")
 		if e := c.throttle(retryAfter); e != nil {
 			res.Body.Close()
 			return nil, e
 		}
 		if c.Log != nil {
-			b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-			c.Log(rateDiagnostic(uri, retryAfter, b))
+			if diagnosticBody == nil {
+				diagnosticBody, _ = io.ReadAll(io.LimitReader(res.Body, 4096))
+			}
+			c.Log(rateDiagnostic(uri, retryAfter, diagnosticBody))
 		}
 		res.Body.Close()
 		if deferred, _ := ctx.Value(zipDeferKey{}).(bool); deferred {
@@ -228,6 +248,10 @@ func (c *Client) requestOnce(ctx context.Context, method, uri string, body []byt
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Referer", c.Base+"/client/photo")
 	req.Header.Set("Accept-Language", "ru,en;q=0.9")
+	if c.isWebDAVURL(req.URL) && c.WebDAVToken != "" {
+		req.Header.Set("Authorization", "OAuth "+c.WebDAVToken)
+		req.Header.Set("Range", "bytes=0-")
+	}
 	if method == "POST" {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", c.Base)
@@ -264,6 +288,11 @@ func (c *Client) requestOnce(ctx context.Context, method, uri string, body []byt
 	}
 	previousRedirect := redirectClient.CheckRedirect
 	redirectClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// Mobile OAuth belongs only to the WebDAV origin, never to a CDN
+		// redirect or a different host supplied by a server response.
+		if !c.isWebDAVURL(req.URL) {
+			req.Header.Del("Authorization")
+		}
 		if previousRedirect != nil {
 			if e := previousRedirect(req, via); e != nil {
 				return e
@@ -444,7 +473,11 @@ func (c *Client) transfer(ctx context.Context, uri, dst string, digest *Digest) 
 		if e != nil {
 			last = e
 		} else {
-			if res.StatusCode == 200 {
+			if res.StatusCode == 200 || res.StatusCode == 206 && fullWebDAVResponse(ctx, res) {
+				if res.StatusCode == 206 && res.ContentLength < 0 {
+					m := fullRangeRE.FindStringSubmatch(res.Header.Get("Content-Range"))
+					res.ContentLength, _ = strconv.ParseInt(m[2], 10, 64)
+				}
 				ct := strings.ToLower(res.Header.Get("Content-Type"))
 				if strings.Contains(ct, "text/html") || strings.Contains(ct, "application/json") {
 					res.Body.Close()
@@ -491,7 +524,7 @@ func (c *Client) transfer(ctx context.Context, uri, dst string, digest *Digest) 
 				last = errors.New("медиа пустое или скачано не полностью")
 			} else {
 				res.Body.Close()
-				last = fmt.Errorf("медиа: HTTP %d", res.StatusCode)
+				last = &MediaStatusError{Status: res.StatusCode}
 				// An unsuccessful availability probe must not occupy a worker
 				// with immediate retries. Record it and try the next available
 				// quality; a later version check can retry transient HTTP errors.

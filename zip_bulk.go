@@ -24,6 +24,15 @@ type zipDeferKey struct{}
 
 var errZIPDeferred = errors.New("подготовка ZIP отложена из-за временного HTTP 429")
 
+var errZIPDisabled = errors.New("Яндекс отключил скачивание серверных ZIP (MPFS 394); оригиналы можно загружать отдельно")
+
+// A confirmed disabled feature is different from a request quota. Probe it
+// again on a later check, without slowing down ordinary media downloads.
+func (s *Store) zipDisabledUntil() time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, s.get("zip_disabled_until"))
+	return t
+}
+
 type ZIPStatus struct {
 	Queued    int     `json:"queued"`
 	Stage     string  `json:"stage"`
@@ -199,15 +208,26 @@ func (c *Client) fetchZIPBatch(ctx context.Context, s *Store, b zipBatchRecord) 
 		zr.Close()
 		return st.Size(), s.finishZIPState(b.ID, "downloaded", st.Size(), nil)
 	}
+	if s.zipDisabledUntil().After(time.Now()) {
+		return 0, errZIPDisabled
+	}
 	if e := s.rememberZIPBatch(b); e != nil {
 		return 0, e
 	}
 	d, e := c.call(context.WithValue(ctx, zipDeferKey{}, true), "mpfs/bulk-download-prepare", Object{"items": b.IDs})
 	if e != nil {
+		if errors.Is(e, errZIPDisabled) {
+			if se := s.set("zip_disabled_until", time.Now().Add(6*time.Hour).UTC().Format(time.RFC3339Nano)); se != nil {
+				return 0, &LocalError{se}
+			}
+		}
 		if se := s.finishZIPState(b.ID, "deferred", 0, e); se != nil {
 			return 0, se
 		}
 		return 0, e
+	}
+	if e := s.set("zip_disabled_until", ""); e != nil {
+		return 0, &LocalError{e}
 	}
 	uri := first(d, "download_url")
 	if uri == "" {
@@ -450,6 +470,13 @@ func runZIPPass(ctx context.Context, s *Store, c *Client, log func(string)) erro
 	recovered := status.Archives
 	status.Batches = recovered + len(batches)
 	log(fmt.Sprintf("ZIP: %d фотографий без оригинала, %d пачек, до %d снимков; архивы скачиваются последовательно.", len(resources), len(batches), limit))
+	if len(batches) > 0 && s.zipDisabledUntil().After(time.Now()) {
+		status.Stage, status.Error = "unavailable", errZIPDisabled.Error()
+		if e := s.saveZIPStatus(status); e != nil {
+			return e
+		}
+		return errZIPDisabled
+	}
 	for i, batch := range batches {
 		if c.ZIPMaxBatches > 0 && i >= c.ZIPMaxBatches {
 			break
@@ -478,6 +505,9 @@ func runZIPPass(ctx context.Context, s *Store, c *Client, log func(string)) erro
 		size, e := c.fetchZIPBatch(ctx, s, b)
 		if e != nil {
 			status.Stage = "deferred"
+			if errors.Is(e, errZIPDisabled) {
+				status.Stage = "unavailable"
+			}
 			status.Error = e.Error()
 			status.Seconds = time.Since(started).Seconds()
 			if se := s.saveZIPStatus(status); se != nil {

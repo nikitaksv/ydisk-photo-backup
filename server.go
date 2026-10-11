@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ import (
 //go:embed ui/*
 var ui embed.FS
 
-const buildVersion = "2026-10-12.preview-first.1"
+const buildVersion = "2026-10-12.zip-disabled.1"
 
 type Job struct {
 	mu             sync.Mutex
@@ -206,6 +207,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 			return
 		}
 		_, ce := os.Stat(cookies)
+		_, oe := os.Stat(filepath.Join(s.Root, "oauth-token.txt"))
 		zipProgress := s.zipStatus()
 		transfer, storage := metrics.status()
 		job.mu.Lock()
@@ -229,7 +231,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 			phase = "rate_limited"
 			message = "Яндекс ограничил запросы. Все новые запросы ждут общей паузы; файлы остаются в очереди."
 		}
-		writeJSON(w, Object{"build": buildVersion, "download_stage": stage, "transfer": transfer, "storage": storage, "zip": zipProgress, "rate": rate, "stats": st, "running": job.running, "phase": phase, "message": message, "logs": job.logs, "out": s.Root, "cookies": ce == nil, "token": token, "watching": job.watching, "watch_interval_minutes": int(job.interval / time.Minute), "next_check": job.next.Format(time.RFC3339)})
+		writeJSON(w, Object{"build": buildVersion, "webdav_configured": oe == nil, "download_stage": stage, "transfer": transfer, "storage": storage, "zip": zipProgress, "rate": rate, "stats": st, "running": job.running, "phase": phase, "message": message, "logs": job.logs, "out": s.Root, "cookies": ce == nil, "token": token, "watching": job.watching, "watch_interval_minutes": int(job.interval / time.Minute), "next_check": job.next.Format(time.RFC3339)})
 	})
 	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
