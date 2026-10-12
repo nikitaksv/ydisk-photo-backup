@@ -158,6 +158,9 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 	if e := s.checkAccount(uid); e != nil {
 		return e
 	}
+	if mode == "reconcile" {
+		return c.reconcileReferences(ctx, s, true, log)
+	}
 	if e := verifyVersions(ctx, s, false, log); e != nil {
 		return e
 	}
@@ -214,6 +217,9 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 	if e := runDownloadStage(ctx, s, c, workers, "originals", log); e != nil {
 		return e
 	}
+	if e := c.reconcileReferences(ctx, s, false, log); e != nil {
+		return e
+	}
 	if e := s.report(); e != nil {
 		return e
 	}
@@ -221,15 +227,18 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 	if e != nil {
 		return e
 	}
-	log(fmt.Sprintf("Файлы: %d / %d; версии: %d; без оригиналов: %d; без копии: %d", st.Done, st.Total, st.Archives, st.NoOriginal, st.Total-st.Done))
+	log(fmt.Sprintf("Файлы: %d / %d; версии: %d; без оригиналов: %d; без копии: %d", st.Done, st.Confirmed, st.Archives, st.NoOriginal, st.ConfirmedNoCopy))
 	if collectErr != nil {
 		return collectErr
 	}
 	if (mode == "resume" || mode == "zip") && st.Inventory != "complete" {
 		return fmt.Errorf("проход по сохранённому списку завершён; полнота списка не подтверждена")
 	}
+	if st.Unconfirmed > 0 {
+		return fmt.Errorf("неподтверждённых записей: %d; подтверждённых файлов без копии: %d; записи сохранены для отдельной проверки", st.Unconfirmed, st.ConfirmedNoCopy)
+	}
 	if st.Failed+st.Pending > 0 {
-		return fmt.Errorf("частичный архив: %d файлов без копии; подробности в отчёте", st.Total-st.Done)
+		return fmt.Errorf("частичный архив: %d файлов без копии; подробности в отчёте", st.ConfirmedNoCopy)
 	}
 	return nil
 }
@@ -243,6 +252,11 @@ func runDownloadStage(ctx context.Context, s *Store, c *Client, workers int, sta
 		quality, label = "preview", "Превью"
 	}
 	where := "NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id AND quality='" + quality + "')"
+	if st, e := s.stats(); e != nil {
+		return e
+	} else if st.Unconfirmed > 0 {
+		log(fmt.Sprintf("%s: %d неподтверждённых записей исключены; метаданные проверяются отдельно после оригиналов.", label, st.Unconfirmed))
+	}
 	seen := make(map[string]bool)
 	for {
 		queue, e := s.downloadQueue(where)

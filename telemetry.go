@@ -75,11 +75,11 @@ func sampleAt(samples []transferSample, now time.Time, window time.Duration) tra
 }
 
 func transferRates(samples []transferSample, st Stats, running, limited bool) TransferStatus {
-	r := TransferStatus{MediaBytes: st.Bytes, LogicalFiles: st.Done, Versions: st.Archives, Remaining: st.Total - st.Done, ETAState: "measuring", ETAScope: "known_files"}
+	r := TransferStatus{MediaBytes: st.Bytes, LogicalFiles: st.Done, Versions: st.Archives, Remaining: st.ConfirmedNoCopy, ETAState: "measuring", ETAScope: "confirmed_files"}
 	if r.Remaining < 0 {
 		r.Remaining = 0
 	}
-	if st.Inventory == "complete" {
+	if st.Inventory == "complete" && st.Unconfirmed == 0 {
 		r.ETAScope = "full_inventory"
 	}
 	if len(samples) < 2 {

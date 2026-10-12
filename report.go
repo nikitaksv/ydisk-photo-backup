@@ -71,15 +71,16 @@ func (s *Store) report() error {
 	return atomicFile(filepath.Join(s.Root, "report.csv"), func(f *os.File) error {
 		f.Write([]byte{0xef, 0xbb, 0xbf})
 		w := csv.NewWriter(f)
-		w.Write([]string{"id", "name", "status", "best_quality", "original_archive", "preview_archive", "thumbnail_archive", "original_bytes", "preview_bytes", "thumbnail_bytes", "created", "creation_source", "timezone_known", "original_error", "preview_error", "thumbnail_error", "file_error"})
-		rows, e := s.DB.Query(`SELECT f.id,f.name,f.status,f.raw,f.result,f.error,COALESCE(v.original,'{}'),COALESCE(v.preview,'{}'),COALESCE(v.thumbnail,'{}'),COALESCE(e.original_error,''),COALESCE(e.preview_error,''),COALESCE(e.thumbnail_error,'') FROM files f LEFT JOIN (` + versionsPivot + `) v ON v.file_id=f.id LEFT JOIN (` + errorsPivot + `) e ON e.file_id=f.id ORDER BY f.id`)
+		w.Write([]string{"id", "name", "status", "best_quality", "original_archive", "preview_archive", "thumbnail_archive", "original_bytes", "preview_bytes", "thumbnail_bytes", "created", "creation_source", "timezone_known", "original_error", "preview_error", "thumbnail_error", "file_error", "record_state"})
+		rows, e := s.DB.Query(`SELECT f.id,f.name,f.status,f.raw,f.result,f.error,COALESCE(v.original,'{}'),COALESCE(v.preview,'{}'),COALESCE(v.thumbnail,'{}'),COALESCE(e.original_error,''),COALESCE(e.preview_error,''),COALESCE(e.thumbnail_error,''),` + confirmedSQL("f") + ` FROM files f LEFT JOIN (` + versionsPivot + `) v ON v.file_id=f.id LEFT JOIN (` + errorsPivot + `) e ON e.file_id=f.id ORDER BY f.id`)
 		if e != nil {
 			return e
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var id, name, status, raw, b, msg, o, p, t, oe, pe, te string
-			if e := rows.Scan(&id, &name, &status, &raw, &b, &msg, &o, &p, &t, &oe, &pe, &te); e != nil {
+			var confirmed bool
+			if e := rows.Scan(&id, &name, &status, &raw, &b, &msg, &o, &p, &t, &oe, &pe, &te, &confirmed); e != nil {
 				return e
 			}
 			var best, original, preview, thumbnail Result
@@ -89,7 +90,14 @@ func (s *Store) report() error {
 			json.Unmarshal([]byte(t), &thumbnail)
 			m, _ := decodeJSON([]byte(raw))
 			meta := metadataFrom(m, best.Metadata.EmbeddedEXIF)
-			w.Write([]string{id, name, status, best.Quality, original.Archive, preview.Archive, thumbnail.Archive, strconv.FormatInt(original.Bytes, 10), strconv.FormatInt(preview.Bytes, 10), strconv.FormatInt(thumbnail.Bytes, 10), meta.Created, meta.CreationSource, strconv.FormatBool(meta.TimezoneKnown), oe, pe, te, msg})
+			recordState := "unconfirmed"
+			if confirmed {
+				recordState = "confirmed_no_copy"
+				if best.Quality != "" {
+					recordState = "saved"
+				}
+			}
+			w.Write([]string{id, name, status, best.Quality, original.Archive, preview.Archive, thumbnail.Archive, strconv.FormatInt(original.Bytes, 10), strconv.FormatInt(preview.Bytes, 10), strconv.FormatInt(thumbnail.Bytes, 10), meta.Created, meta.CreationSource, strconv.FormatBool(meta.TimezoneKnown), oe, pe, te, msg, recordState})
 		}
 		w.Flush()
 		if e := w.Error(); e != nil {

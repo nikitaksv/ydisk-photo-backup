@@ -7,6 +7,7 @@ import (
 	_ "modernc.org/sqlite"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,7 @@ func openStore(root string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS original_zip_queue(file_id TEXT PRIMARY KEY,attempted INTEGER NOT NULL DEFAULT 0);
 	CREATE TABLE IF NOT EXISTS zip_batches(id TEXT PRIMARY KEY,archive TEXT NOT NULL,items TEXT NOT NULL,state TEXT NOT NULL,matched INTEGER NOT NULL DEFAULT 0,missing INTEGER NOT NULL DEFAULT 0,bytes INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS versions(file_id TEXT NOT NULL,quality TEXT NOT NULL,result TEXT NOT NULL,added TEXT NOT NULL,PRIMARY KEY(file_id,quality));
+ CREATE TABLE IF NOT EXISTS record_checks(file_id TEXT PRIMARY KEY,result TEXT NOT NULL,checked TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS version_errors(file_id TEXT NOT NULL,quality TEXT NOT NULL,error TEXT NOT NULL,checked TEXT NOT NULL,PRIMARY KEY(file_id,quality));
  INSERT OR IGNORE INTO versions(file_id,quality,result,added) SELECT id,json_extract(result,'$.quality'),result,updated FROM files WHERE status='done' AND json_extract(result,'$.quality') IN ('original','preview','thumbnail');`)
 	if e != nil {
@@ -87,7 +89,10 @@ func (s *Store) get(k string) string {
 	return v
 }
 
-const upsertFile = `INSERT INTO files(id,cluster,name,raw,updated) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET cluster=excluded.cluster,name=excluded.name,raw=excluded.raw,updated=excluded.updated`
+// Promoting an unresolved reference is a metadata event, never a downloaded
+// file. Old reference-probe failures must not become confirmed-file failures.
+var promotionSQL = "NOT COALESCE(" + fileMetadataSQL + ",0) AND COALESCE(" + strings.ReplaceAll(fileMetadataSQL, "raw", "excluded.raw") + ",0) AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id)"
+var upsertFile = `INSERT INTO files(id,cluster,name,raw,updated) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET cluster=excluded.cluster,name=excluded.name,status=CASE WHEN ` + promotionSQL + ` THEN 'pending' ELSE files.status END,error=CASE WHEN ` + promotionSQL + ` THEN '' ELSE files.error END,raw=excluded.raw,updated=excluded.updated`
 
 func fileArgs(r Resource) []any {
 	raw := r.Raw
@@ -164,7 +169,7 @@ type downloadItem struct {
 }
 
 func (s *Store) downloadQueue(where string) ([]downloadItem, error) {
-	rows, e := s.DB.Query(`SELECT id,CASE WHEN ` + downloadVideoSQL + ` THEN 1 ELSE 0 END FROM files WHERE ` + where + ` ORDER BY 2,EXISTS(SELECT 1 FROM versions WHERE file_id=files.id),CASE WHEN EXISTS (
+	rows, e := s.DB.Query(`SELECT id,CASE WHEN ` + downloadVideoSQL + ` THEN 1 ELSE 0 END FROM files WHERE ` + confirmedSQL("files") + ` AND (` + where + `) ORDER BY 2,EXISTS(SELECT 1 FROM versions WHERE file_id=files.id),CASE WHEN EXISTS (
 	 SELECT 1 FROM json_each(files.raw,'$.meta.sizes') p
 	 WHERE json_extract(p.value,'$.name')='ORIGINAL' AND instr(json_extract(p.value,'$.url'),'/disk/')>0
 	) THEN 0 ELSE 1 END,id`)
@@ -312,33 +317,43 @@ func (s *Store) result(id string) (Result, error) {
 }
 
 type Stats struct {
-	ArchiveFiles  int    `json:"archive_files"`
-	ZIPArchives   int    `json:"zip_archives"`
-	Total         int    `json:"total"`
-	Done          int    `json:"done"`
-	Failed        int    `json:"failed"`
-	Pending       int    `json:"pending"`
-	Original      int    `json:"original"`
-	Preview       int    `json:"preview"`
-	Thumbnail     int    `json:"thumbnail"`
-	NoOriginal    int    `json:"no_original"`
-	NoPreview     int    `json:"no_preview"`
-	NoThumbnail   int    `json:"no_thumbnail"`
-	OnlyPreview   int    `json:"only_preview"`
-	OnlyThumbnail int    `json:"only_thumbnail"`
-	Archives      int    `json:"archives"`
-	Bytes         int64  `json:"bytes"`
-	Inventory     string `json:"inventory"`
+	Records         int    `json:"records"`
+	Confirmed       int    `json:"confirmed"`
+	ConfirmedNoCopy int    `json:"confirmed_no_copy"`
+	Unconfirmed     int    `json:"unconfirmed"`
+	ArchiveFiles    int    `json:"archive_files"`
+	ZIPArchives     int    `json:"zip_archives"`
+	Total           int    `json:"total"`
+	Done            int    `json:"done"`
+	Failed          int    `json:"failed"`
+	Pending         int    `json:"pending"`
+	Original        int    `json:"original"`
+	Preview         int    `json:"preview"`
+	Thumbnail       int    `json:"thumbnail"`
+	NoOriginal      int    `json:"no_original"`
+	NoPreview       int    `json:"no_preview"`
+	NoThumbnail     int    `json:"no_thumbnail"`
+	OnlyPreview     int    `json:"only_preview"`
+	OnlyThumbnail   int    `json:"only_thumbnail"`
+	Archives        int    `json:"archives"`
+	Bytes           int64  `json:"bytes"`
+	Inventory       string `json:"inventory"`
 }
 
 const versionFlags = `SELECT file_id,MAX(quality='original') o,MAX(quality='preview') p,MAX(quality='thumbnail') t,COUNT(*) n,SUM(bytes) bytes FROM versions GROUP BY file_id`
 
 func (s *Store) stats() (Stats, error) {
 	st := Stats{Inventory: s.get("inventory")}
-	e := s.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(v.n>0),0),COALESCE(SUM(f.status='failed' AND v.n IS NULL),0),COALESCE(SUM(f.status='pending' AND v.n IS NULL),0),COALESCE(SUM(v.o),0),COALESCE(SUM(v.p),0),COALESCE(SUM(v.t),0),COALESCE(SUM(v.o=0 AND v.p=1),0),COALESCE(SUM(v.o=0 AND v.p=0 AND v.t=1),0),COALESCE(SUM(v.n),0),COALESCE(SUM(v.bytes),0) FROM files f LEFT JOIN (`+versionFlags+`) v ON v.file_id=f.id`).Scan(&st.Total, &st.Done, &st.Failed, &st.Pending, &st.Original, &st.Preview, &st.Thumbnail, &st.OnlyPreview, &st.OnlyThumbnail, &st.Archives, &st.Bytes)
-	st.NoOriginal = st.Total - st.Original
-	st.NoPreview = st.Total - st.Preview
-	st.NoThumbnail = st.Total - st.Thumbnail
+	e := s.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(v.n>0),0),COALESCE(SUM(f.status='failed' AND v.n IS NULL AND `+confirmedSQL("f")+`),0),COALESCE(SUM(f.status='pending' AND v.n IS NULL AND `+confirmedSQL("f")+`),0),COALESCE(SUM(v.o),0),COALESCE(SUM(v.p),0),COALESCE(SUM(v.t),0),COALESCE(SUM(v.o=0 AND v.p=1),0),COALESCE(SUM(v.o=0 AND v.p=0 AND v.t=1),0),COALESCE(SUM(v.n),0),COALESCE(SUM(v.bytes),0),COALESCE(SUM(`+confirmedSQL("f")+`),0) FROM files f LEFT JOIN (`+versionFlags+`) v ON v.file_id=f.id`).Scan(&st.Total, &st.Done, &st.Failed, &st.Pending, &st.Original, &st.Preview, &st.Thumbnail, &st.OnlyPreview, &st.OnlyThumbnail, &st.Archives, &st.Bytes, &st.Confirmed)
+	if e != nil {
+		return st, e
+	}
+	st.Records = st.Total // total remains a legacy alias for all catalog records.
+	st.Unconfirmed = st.Records - st.Confirmed
+	st.ConfirmedNoCopy = st.Confirmed - st.Done
+	st.NoOriginal = st.Confirmed - st.Original
+	st.NoPreview = st.Confirmed - st.Preview
+	st.NoThumbnail = st.Confirmed - st.Thumbnail
 	if e == nil {
 		e = s.DB.QueryRow("SELECT COUNT(DISTINCT json_extract(result,'$.archive')),COUNT(DISTINCT CASE WHEN json_extract(result,'$.bundle')=1 THEN json_extract(result,'$.archive') END) FROM versions").Scan(&st.ArchiveFiles, &st.ZIPArchives)
 	}
@@ -353,20 +368,26 @@ func (s *Store) checkAccount(uid string) error {
 }
 func filterSQL(filter string) (string, error) {
 	switch filter {
-	case "", "all":
+	case "", "all", "confirmed":
+		return confirmedSQL("f"), nil
+	case "records-all":
 		return "1=1", nil
+	case "unconfirmed":
+		return "NOT " + confirmedSQL("f"), nil
+	case "saved":
+		return "EXISTS(SELECT 1 FROM versions WHERE file_id=f.id)", nil
 	case "missing-original":
-		return "NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original')", nil
+		return confirmedSQL("f") + " AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original')", nil
 	case "missing-preview":
-		return "NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='preview')", nil
+		return confirmedSQL("f") + " AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='preview')", nil
 	case "missing-thumbnail":
-		return "NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='thumbnail')", nil
+		return confirmedSQL("f") + " AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='thumbnail')", nil
 	case "no-copy":
-		return "NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id)", nil
+		return confirmedSQL("f") + " AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id)", nil
 	case "failed":
-		return "f.status='failed' AND v.n IS NULL", nil
+		return confirmedSQL("f") + " AND f.status='failed' AND v.n IS NULL", nil
 	case "pending":
-		return "f.status='pending' AND v.n IS NULL", nil
+		return confirmedSQL("f") + " AND f.status='pending' AND v.n IS NULL", nil
 	case "preview-best":
 		return "v.o=0 AND v.p=1", nil
 	case "original-best":
@@ -379,13 +400,15 @@ func filterSQL(filter string) (string, error) {
 }
 
 type FileRow struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Original  bool   `json:"original"`
-	Preview   bool   `json:"preview"`
-	Thumbnail bool   `json:"thumbnail"`
-	Error     string `json:"error,omitempty"`
-	Created   string `json:"created,omitempty"`
+	Confirmed   bool   `json:"confirmed"`
+	RecordState string `json:"record_state"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Original    bool   `json:"original"`
+	Preview     bool   `json:"preview"`
+	Thumbnail   bool   `json:"thumbnail"`
+	Error       string `json:"error,omitempty"`
+	Created     string `json:"created,omitempty"`
 }
 
 func (s *Store) list(filter string, offset, limit int) ([]FileRow, int, error) {
@@ -404,7 +427,7 @@ func (s *Store) list(filter string, offset, limit int) ([]FileRow, int, error) {
 	if e := s.DB.QueryRow("SELECT COUNT(*)" + from).Scan(&total); e != nil {
 		return nil, 0, e
 	}
-	rows, e := s.DB.Query(`SELECT f.id,f.name,COALESCE(v.o,0),COALESCE(v.p,0),COALESCE(v.t,0),f.error,f.raw,f.result`+from+` ORDER BY f.id LIMIT ? OFFSET ?`, limit, offset)
+	rows, e := s.DB.Query(`SELECT f.id,f.name,COALESCE(v.o,0),COALESCE(v.p,0),COALESCE(v.t,0),f.error,f.raw,f.result,`+confirmedSQL("f")+from+` ORDER BY f.id LIMIT ? OFFSET ?`, limit, offset)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -413,8 +436,17 @@ func (s *Store) list(filter string, offset, limit int) ([]FileRow, int, error) {
 	for rows.Next() {
 		var row FileRow
 		var raw, best string
-		if e := rows.Scan(&row.ID, &row.Name, &row.Original, &row.Preview, &row.Thumbnail, &row.Error, &raw, &best); e != nil {
+		if e := rows.Scan(&row.ID, &row.Name, &row.Original, &row.Preview, &row.Thumbnail, &row.Error, &raw, &best, &row.Confirmed); e != nil {
 			return nil, 0, e
+		}
+		row.RecordState = "unconfirmed"
+		if row.Confirmed {
+			row.RecordState = "confirmed_no_copy"
+			if row.Original || row.Preview || row.Thumbnail {
+				row.RecordState = "saved"
+			}
+		} else {
+			row.Error = "Photoslice содержит ссылку, но подробные данные файла не получены; отдельная проверка метаданных."
 		}
 		m, _ := decodeJSON([]byte(raw))
 		var result Result

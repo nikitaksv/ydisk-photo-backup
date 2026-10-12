@@ -146,7 +146,16 @@ func (c *Client) collectCluster(ctx context.Context, s *Store, psid, cid string,
 			if id := first(cl, "id", "cluster_id"); id != "" && id != cid {
 				continue
 			}
-			for _, item := range arr(cl["items"]) {
+			items := arr(cl["items"])
+			// Photoslice can return the entire cluster's item index on every
+			// request, while resources.fetched contains only the requested range.
+			// Counting the whole index skips every metadata page after the first.
+			if len(items) > end-offset+1 {
+				begin := min(offset, len(items))
+				finish := min(end+1, len(items))
+				items = items[begin:finish]
+			}
+			for _, item := range items {
 				indexed++
 				if ref := str(item); ref != "" {
 					if full := byAlias[ref]; full != nil {

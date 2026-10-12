@@ -15,14 +15,14 @@ func TestPhotoQueueBeforeVideoRegardlessOfReadyOriginal(t *testing.T) {
 	s := testStore(t)
 	ready := Object{"sizes": []any{Object{"name": "ORIGINAL", "url": "https://downloader.invalid/disk/ready"}}}
 	for _, raw := range []Object{
-		{"path": "a-video", "name": "movie.MOV", "meta": ready},
-		{"path": "b-video", "name": "opaque", "mimetype": "video/mp4"},
-		{"path": "c-video", "name": "opaque", "meta": Object{"mimetype": "VIDEO/QUICKTIME"}},
-		{"path": "d-video", "name": "opaque", "media_type": "video"},
-		{"path": "e-video", "name": "clip.m2ts"},
-		{"path": "a-photo", "name": "lost.HEIC"},
-		{"path": "z-photo", "name": "photo.jpg", "meta": ready},
-		{"path": "gif-photo", "name": "animated.gif"},
+		{"type": "file", "path": "a-video", "name": "movie.MOV", "meta": ready},
+		{"type": "file", "path": "b-video", "name": "opaque", "mimetype": "video/mp4"},
+		{"type": "file", "path": "c-video", "name": "opaque", "meta": Object{"mimetype": "VIDEO/QUICKTIME"}},
+		{"type": "file", "path": "d-video", "name": "opaque", "media_type": "video"},
+		{"type": "file", "path": "e-video", "name": "clip.m2ts"},
+		{"type": "file", "path": "a-photo", "name": "lost.HEIC"},
+		{"type": "file", "path": "z-photo", "name": "photo.jpg", "meta": ready},
+		{"type": "file", "path": "gif-photo", "name": "animated.gif"},
 	} {
 		r, e := resource(raw, "")
 		if e != nil {
@@ -49,9 +49,9 @@ func TestPhotoQueueBeforeVideoRegardlessOfReadyOriginal(t *testing.T) {
 func TestFilesWithNoCopyPrecedeRepeatedQualityChecks(t *testing.T) {
 	s := testStore(t)
 	for _, raw := range []Object{
-		{"path": "old-photo", "name": "old.jpg", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": "https://downloader.invalid/disk/ready"}}}},
-		{"path": "new-photo", "name": "new.jpg"},
-		{"path": "new-video", "name": "new.mp4"},
+		{"type": "file", "path": "old-photo", "name": "old.jpg", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": "https://downloader.invalid/disk/ready"}}}},
+		{"type": "file", "path": "new-photo", "name": "new.jpg"},
+		{"type": "file", "path": "new-video", "name": "new.mp4"},
 	} {
 		r, e := resource(raw, "")
 		if e != nil {
@@ -125,7 +125,7 @@ func TestOriginalsWaitForAllPreviewsAndCancellationReleasesBarrier(t *testing.T)
 				if id == "video" {
 					fileName = "movie.mp4"
 				}
-				r, e := resource(Object{"path": id, "name": fileName, "size": len(data), "meta": Object{"sizes": []any{
+				r, e := resource(Object{"type": "file", "path": id, "name": fileName, "size": len(data), "meta": Object{"sizes": []any{
 					Object{"name": "ORIGINAL", "url": server.URL + "/disk/" + id},
 					Object{"name": "XXXL", "url": server.URL + "/preview/" + id, "width": 500, "height": 500},
 					Object{"name": "S", "url": server.URL + "/thumbnail/" + id, "width": 100, "height": 100},

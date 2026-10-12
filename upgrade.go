@@ -8,7 +8,7 @@ import (
 )
 
 func (c *Client) refreshKnown(ctx context.Context, s *Store, log func(string)) error {
-	rows, e := s.DB.Query(`SELECT DISTINCT cluster FROM files f WHERE NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original') OR NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='preview')`)
+	rows, e := s.DB.Query(`SELECT DISTINCT cluster FROM files f WHERE ` + confirmedSQL("f") + ` AND (NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original') OR NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='preview'))`)
 	if e != nil {
 		return e
 	}
@@ -68,7 +68,7 @@ func watchBackup(ctx context.Context, s *Store, cookies string, workers int, int
 		if se != nil {
 			return se
 		}
-		if st.NoOriginal == 0 && st.NoPreview == 0 {
+		if st.NoOriginal == 0 && st.NoPreview == 0 && st.Unconfirmed == 0 && st.Inventory == "complete" {
 			log("Все известные файлы имеют оригиналы и превью; проверка завершена.")
 			return nil
 		}

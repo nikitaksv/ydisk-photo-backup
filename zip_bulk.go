@@ -70,7 +70,7 @@ type zipBatchRecord struct {
 func (s *Store) zipStatus() ZIPStatus {
 	var st ZIPStatus
 	json.Unmarshal([]byte(s.get("zip_status")), &st)
-	s.DB.QueryRow("SELECT COUNT(*) FROM original_zip_queue q WHERE NOT EXISTS(SELECT 1 FROM versions WHERE file_id=q.file_id AND quality='original')").Scan(&st.Queued)
+	s.DB.QueryRow("SELECT COUNT(*) FROM original_zip_queue q JOIN files f ON f.id=q.file_id WHERE " + confirmedSQL("f") + " AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=q.file_id AND quality='original')").Scan(&st.Queued)
 	return st
 }
 
@@ -175,7 +175,7 @@ func (s *Store) pendingZIPBatches() ([]zipBatchRecord, error) {
 func (s *Store) zipQueue() ([]Resource, error) {
 	// Plan with small records; only the current 500 resources need their full
 	// API metadata and signed candidates in memory.
-	rows, e := s.DB.Query(`SELECT id,name,COALESCE(NULLIF(json_extract(raw,'$.size'),0),json_extract(raw,'$.meta.size'),0) FROM files WHERE NOT ` + downloadVideoSQL + ` AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id AND quality='original') ORDER BY EXISTS(SELECT 1 FROM versions WHERE file_id=files.id),id`)
+	rows, e := s.DB.Query(`SELECT id,name,COALESCE(NULLIF(json_extract(raw,'$.size'),0),json_extract(raw,'$.meta.size'),0) FROM files WHERE ` + confirmedSQL("files") + ` AND NOT ` + downloadVideoSQL + ` AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id AND quality='original') ORDER BY EXISTS(SELECT 1 FROM versions WHERE file_id=files.id),id`)
 	if e != nil {
 		return nil, e
 	}

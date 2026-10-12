@@ -61,7 +61,7 @@ func TestZIPMode429FallsBackAfterPreviewsWithoutExtraThumbnails(t *testing.T) {
 
 func TestZIPQueueExcludesVideosAndSavedOriginals(t *testing.T) {
 	s := testStore(t)
-	for _, r := range []Resource{{ID: "photo", Name: "photo.jpg", Raw: Object{"id": "photo", "name": "photo.jpg"}}, {ID: "video", Name: "video.MOV", Raw: Object{"id": "video", "name": "video.MOV"}}, {ID: "mime", Name: "unknown", Raw: Object{"id": "mime", "name": "unknown", "mimetype": "video/mp4"}}, {ID: "saved", Name: "saved.jpg", Raw: Object{"id": "saved", "name": "saved.jpg"}}} {
+	for _, r := range []Resource{{ID: "photo", Name: "photo.jpg", Raw: Object{"type": "file", "id": "photo", "name": "photo.jpg"}}, {ID: "video", Name: "video.MOV", Raw: Object{"type": "file", "id": "video", "name": "video.MOV"}}, {ID: "mime", Name: "unknown", Raw: Object{"type": "file", "id": "mime", "name": "unknown", "mimetype": "video/mp4"}}, {ID: "saved", Name: "saved.jpg", Raw: Object{"type": "file", "id": "saved", "name": "saved.jpg"}}} {
 		s.save(r)
 	}
 	s.done(Result{ID: "saved", Quality: "original", Archive: "saved.zip", Bytes: 1})

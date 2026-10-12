@@ -27,8 +27,8 @@ func TestDirectOriginalSkipsZIPPreparationAfterPreview(t *testing.T) {
 func TestDownloadQueuePrioritizesReadyOriginalLinks(t *testing.T) {
 	s := testStore(t)
 	for _, raw := range []Object{
-		{"path": "/disk/a", "meta": Object{}},
-		{"path": "/photounlim/z", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": "https://downloader.invalid/disk/signed"}}}},
+		{"type": "file", "path": "/disk/a", "meta": Object{}},
+		{"type": "file", "path": "/photounlim/z", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": "https://downloader.invalid/disk/signed"}}}},
 	} {
 		r, e := resource(raw, "")
 		if e != nil {

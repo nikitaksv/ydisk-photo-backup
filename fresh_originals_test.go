@@ -27,7 +27,7 @@ func TestFreshOriginalsRenewExpiredLinksOncePerCluster(t *testing.T) {
 			return Object{"photoslice_id": "snapshot"}
 		case "intapi/photo-get-clusters-with-resources":
 			clusterCalls.Add(1)
-			return Object{"resources": Object{"fetched": []any{Object{"path": "photo", "name": "photo.png", "size": len(data), "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": base + "/disk/fresh"}}}}}}, "clusters": Object{"fetched": []any{Object{"id": "day", "items": []any{"photo"}}}}}
+			return Object{"resources": Object{"fetched": []any{Object{"type": "file", "path": "photo", "name": "photo.png", "size": len(data), "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": base + "/disk/fresh"}}}}}}, "clusters": Object{"fetched": []any{Object{"id": "day", "items": []any{"photo"}}}}}
 		default:
 			t.Error("unexpected method", str(d["apiMethod"]))
 			return nil
@@ -35,7 +35,7 @@ func TestFreshOriginalsRenewExpiredLinksOncePerCluster(t *testing.T) {
 	}, map[string][]byte{"/disk/fresh": data}, nil)
 	c.BatchOriginals = true
 	c.FreshLinks = newLinkRefresher()
-	r, _ := resource(Object{"path": "photo", "name": "photo.png", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": c.Base + "/disk/" + strings.Repeat("a", 64) + "/" + fmt.Sprintf("%08x", time.Now().Add(-time.Hour).Unix()) + "/old"}}}}, "day")
+	r, _ := resource(Object{"type": "file", "path": "photo", "name": "photo.png", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": c.Base + "/disk/" + strings.Repeat("a", 64) + "/" + fmt.Sprintf("%08x", time.Now().Add(-time.Hour).Unix()) + "/old"}}}}, "day")
 	if e := s.save(r); e != nil {
 		t.Fatal(e)
 	}
@@ -83,7 +83,7 @@ func TestFreshOriginalRefreshFailureQueuesInsteadOfIndividualZIP(t *testing.T) {
 	}, map[string][]byte{"/preview/p": picture(600, 400)}, nil)
 	c.BatchOriginals = true
 	c.FreshLinks = newLinkRefresher()
-	r, _ := resource(Object{"path": "photo", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": c.Base + "/disk/old"}, Object{"name": "XL", "url": c.Base + "/preview/p"}}}}, "day")
+	r, _ := resource(Object{"type": "file", "path": "photo", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": c.Base + "/disk/old"}, Object{"name": "XL", "url": c.Base + "/preview/p"}}}}, "day")
 	s.save(r)
 	if e := c.processBatch(context.Background(), s, []Resource{r}, func(string) {}); e != nil {
 		t.Fatal(e)
@@ -116,7 +116,7 @@ func TestOriginalZIPAccumulates500AndKeepsPartialSuccess(t *testing.T) {
 	c.BatchOriginals = true
 	c.zipFallbackStart = time.Now().UnixNano()
 	for i := 0; i < 500; i++ {
-		r := Resource{ID: fmt.Sprint(i), Name: fmt.Sprintf("photo-%d.png", i), Raw: Object{"path": fmt.Sprint(i), "name": fmt.Sprintf("photo-%d.png", i)}}
+		r := Resource{ID: fmt.Sprint(i), Name: fmt.Sprintf("photo-%d.png", i), Raw: Object{"type": "file", "path": fmt.Sprint(i), "name": fmt.Sprintf("photo-%d.png", i)}}
 		s.save(r)
 		s.queueOriginalZIP(r.ID)
 		if i == 498 {
@@ -158,7 +158,7 @@ func TestOriginalZIPFlushesTailAndNeverSingleFile(t *testing.T) {
 	}, map[string][]byte{"/batch": zipBytes("a.png", picture(400, 400))}, nil)
 	c.BatchOriginals = true
 	for _, name := range []string{"a.png", "b.png"} {
-		s.save(Resource{ID: name, Name: name, Raw: Object{"path": name, "name": name}})
+		s.save(Resource{ID: name, Name: name, Raw: Object{"type": "file", "path": name, "name": name}})
 		s.queueOriginalZIP(name)
 	}
 	if e := c.drainOriginalZIP(context.Background(), s, false, false, func(string) {}); e != nil || calls.Load() != 0 {
@@ -167,7 +167,7 @@ func TestOriginalZIPFlushesTailAndNeverSingleFile(t *testing.T) {
 	if e := c.drainOriginalZIP(context.Background(), s, true, false, func(string) {}); e != nil || calls.Load() != 1 {
 		t.Fatal(e)
 	}
-	s.save(Resource{ID: "c", Name: "c.png", Raw: Object{"path": "c", "name": "c.png"}})
+	s.save(Resource{ID: "c", Name: "c.png", Raw: Object{"type": "file", "path": "c", "name": "c.png"}})
 	s.queueOriginalZIP("c")
 	if e := c.drainOriginalZIP(context.Background(), s, true, false, func(string) {}); e != nil || calls.Load() != 1 {
 		t.Fatal("individual ZIP requested", e)
@@ -183,7 +183,7 @@ func TestOriginalZIPQueuePersistsAnd429DoesNotFailFiles(t *testing.T) {
 	})
 	c.BatchOriginals = true
 	for _, id := range []string{"a", "b"} {
-		s.save(Resource{ID: id, Name: id + ".png", Raw: Object{"path": id, "name": id + ".png"}})
+		s.save(Resource{ID: id, Name: id + ".png", Raw: Object{"type": "file", "path": id, "name": id + ".png"}})
 		s.queueOriginalZIP(id)
 	}
 	if e := c.drainOriginalZIP(context.Background(), s, true, false, func(string) {}); !errors.Is(e, errZIPDeferred) {
@@ -213,7 +213,7 @@ func TestOriginalZIPQueuePersistsAnd429DoesNotFailFiles(t *testing.T) {
 func TestOriginalZIPRecoversDownloadedArchiveOffline(t *testing.T) {
 	s := testStore(t)
 	data := picture(400, 400)
-	r := Resource{ID: "a", Name: "a.png", Raw: Object{"path": "a", "name": "a.png"}}
+	r := Resource{ID: "a", Name: "a.png", Raw: Object{"type": "file", "path": "a", "name": "a.png"}}
 	s.save(r)
 	s.queueOriginalZIP(r.ID)
 	b := newFallbackZIPBatch([]Resource{r}, 1)
@@ -234,7 +234,7 @@ func TestOriginalSizedPreviewIsNotOriginal(t *testing.T) {
 	data := picture(600, 400)
 	c := apiFixture(t, func(Object, string) Object { t.Error("individual ZIP requested"); return nil }, map[string][]byte{"/preview/large": data}, nil)
 	c.BatchOriginals = true
-	r, _ := resource(Object{"path": "a", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": c.Base + "/preview/large?size=ORIGINAL"}}}}, "")
+	r, _ := resource(Object{"type": "file", "path": "a", "meta": Object{"sizes": []any{Object{"name": "ORIGINAL", "url": c.Base + "/preview/large?size=ORIGINAL"}}}}, "")
 	if len(r.Candidates) != 1 || r.Candidates[0].Quality != "preview" {
 		t.Fatal("wrong classification", r.Candidates)
 	}
@@ -250,7 +250,7 @@ func TestOriginalSizedPreviewIsNotOriginal(t *testing.T) {
 func TestOriginalZIPSeparatesDuplicatesAndVideos(t *testing.T) {
 	s := testStore(t)
 	for _, r := range []Resource{{ID: "a", Name: "same.png"}, {ID: "b", Name: "same.png"}, {ID: "v", Name: "video.mp4"}} {
-		r.Raw = Object{"path": r.ID, "name": r.Name}
+		r.Raw = Object{"type": "file", "path": r.ID, "name": r.Name}
 		s.save(r)
 		s.queueOriginalZIP(r.ID)
 	}

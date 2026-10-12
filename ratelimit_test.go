@@ -132,7 +132,7 @@ func TestCancelDuring429LeavesFilePending(t *testing.T) {
 	defer srv.Close()
 	c := &Client{HTTP: srv.Client(), Base: srv.URL, Interval: time.Millisecond, CooldownBase: time.Hour}
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photounlim:/a.png", "name": "a.png"}, "d")
+	r, _ := resource(Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png"}, "d")
 	s.save(r)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -165,7 +165,7 @@ func TestCancelDuring429LeavesFilePending(t *testing.T) {
 func TestRepairOld429PreservesRealErrorsAndCopies(t *testing.T) {
 	s := testStore(t)
 	for _, id := range []string{"limited", "missing", "saved"} {
-		r, _ := resource(Object{"path": id, "name": id}, "d")
+		r, _ := resource(Object{"type": "file", "path": id, "name": id}, "d")
 		s.save(r)
 	}
 	s.attempt("limited", "original", errors.New("mpfs/bulk-download-prepare: HTTP 429 / response"))
@@ -201,7 +201,7 @@ func TestResumeUsesInventoryWithoutEnumeration(t *testing.T) {
 		return Object{"download_url": url + "/original"}
 	}, map[string][]byte{"/client/disk": []byte(`{"sk":"sk","uid":"1234"}`), "/original": zipBytes("a.png", picture(500, 500))}, nil)
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photounlim:/a.png", "name": "a.png"}, "d")
+	r, _ := resource(Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png"}, "d")
 	s.save(r)
 	s.set("inventory", "incomplete")
 	e := runInventory(context.Background(), s, c, 2, "resume", func(string) {})

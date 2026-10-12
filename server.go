@@ -22,7 +22,7 @@ import (
 //go:embed ui/*
 var ui embed.FS
 
-const buildVersion = "2026-10-12.zip-disabled.1"
+const buildVersion = "2026-10-12.records.1"
 
 type Job struct {
 	mu             sync.Mutex
@@ -162,7 +162,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 				if mode == "check" {
 					job.message = "Вход подтверждён."
 				} else {
-					job.message = fmt.Sprintf("Сохранено файлов: %d / %d. Без оригинала: %d. Полученные версии сохранены отдельно.", st.Done, st.Total, st.NoOriginal)
+					job.message = fmt.Sprintf("Сохранено файлов: %d / %d. Без оригинала: %d. Полученные версии сохранены отдельно.", st.Done, st.Confirmed, st.NoOriginal)
 				}
 				if mode == "zip-test" {
 					z := s.zipStatus()
@@ -184,7 +184,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 					job.watching = false
 					s.set("watch_enabled", "false")
 					job.message += " Фоновая проверка приостановлена; устрани причину и включи её снова."
-				} else if mode != "check" && st.Total > 0 && st.NoOriginal == 0 && st.NoPreview == 0 {
+				} else if mode != "check" && st.Total > 0 && st.NoOriginal == 0 && st.NoPreview == 0 && st.Unconfirmed == 0 && st.Inventory == "complete" {
 					job.watching = false
 					s.set("watch_enabled", "false")
 					job.message += " Все оригиналы и превью получены; периодическая проверка завершена."
@@ -334,6 +334,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 	mux.HandleFunc("/api/zip-test", zipAction("zip-test"))
 	mux.HandleFunc("/api/check", action("check"))
 	mux.HandleFunc("/api/upgrade", action("upgrade"))
+	mux.HandleFunc("/api/reconcile", action("reconcile"))
 	mux.HandleFunc("/api/rate-tune", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "method", 405)

@@ -22,7 +22,7 @@ func TestUpgradeKeepsAllThreeVersions(t *testing.T) {
 		case "intapi/photo-init-snapshot":
 			return Object{"photoslice_id": "s"}
 		case "intapi/photo-get-clusters-with-resources":
-			return Object{"resources": Object{"fetched": []any{Object{"path": "photounlim:/a.png", "name": "a.png", "meta": Object{"created": "2024-03-02T14:15:16.123456789+03:00", "sizes": []any{Object{"name": "XXL", "url": url + "/preview", "width": 900, "height": 600}, Object{"name": "S", "url": url + "/thumb", "width": 90, "height": 90}}}}}}}
+			return Object{"resources": Object{"fetched": []any{Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png", "meta": Object{"created": "2024-03-02T14:15:16.123456789+03:00", "sizes": []any{Object{"name": "XXL", "url": url + "/preview", "width": 900, "height": 600}, Object{"name": "S", "url": url + "/thumb", "width": 90, "height": 90}}}}}}}
 		default:
 			if ready.Load() {
 				return Object{"download_url": url + "/original"}
@@ -31,7 +31,7 @@ func TestUpgradeKeepsAllThreeVersions(t *testing.T) {
 		}
 	}, map[string][]byte{"/client/disk": []byte(`{"sk":"sk","uid":"1234"}`), "/original": zipBytes("a.png", picture(1200, 800)), "/preview": picture(900, 600), "/thumb": picture(90, 90)}, nil)
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photounlim:/a.png", "name": "a.png", "thumbnail": c.Base + "/thumb"}, "day")
+	r, _ := resource(Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png", "thumbnail": c.Base + "/thumb"}, "day")
 	s.save(r)
 	s.set("cluster_size:day", "1")
 	thumb, e := c.downloadSelected(context.Background(), s, r, "thumbnail")
@@ -95,7 +95,7 @@ func TestBulkDoesNotLoseMissingMember(t *testing.T) {
 	s := testStore(t)
 	var resources []Resource
 	for _, name := range []string{"a.png", "b.png", "c.png"} {
-		r, _ := resource(Object{"path": "photounlim:/" + name, "name": name}, "d")
+		r, _ := resource(Object{"type": "file", "path": "photounlim:/" + name, "name": name}, "d")
 		s.save(r)
 		resources = append(resources, r)
 	}
@@ -114,7 +114,7 @@ func TestBulkDoesNotLoseMissingMember(t *testing.T) {
 func TestSmallGenericPreviewIsPreservedAsThumbnail(t *testing.T) {
 	c := apiFixture(t, func(Object, string) Object { return Object{} }, map[string][]byte{"/small": picture(100, 100)}, nil)
 	s := testStore(t)
-	r, _ := resource(Object{"path": "a.png", "name": "a.png", "preview": c.Base + "/small"}, "d")
+	r, _ := resource(Object{"type": "file", "path": "a.png", "name": "a.png", "preview": c.Base + "/small"}, "d")
 	s.save(r)
 	if e := c.processBatch(context.Background(), s, []Resource{r}, func(string) {}); e != nil {
 		t.Fatal(e)
@@ -142,7 +142,7 @@ func TestBulkDuplicateNamesAreSeparated(t *testing.T) {
 func TestStatisticsAndFiltersAreLogicalFiles(t *testing.T) {
 	s := testStore(t)
 	for _, id := range []string{"all-three", "preview", "thumb", "failed", "pending"} {
-		r, _ := resource(Object{"path": id, "name": id}, "d")
+		r, _ := resource(Object{"type": "file", "path": id, "name": id}, "d")
 		s.save(r)
 	}
 	for _, pair := range []struct{ id, q string }{{"all-three", "original"}, {"all-three", "preview"}, {"all-three", "thumbnail"}, {"preview", "preview"}, {"thumb", "thumbnail"}} {
@@ -247,11 +247,11 @@ func TestReadEXIFIncludesSubsecondAndOffset(t *testing.T) {
 }
 func TestMetadataSurvivesMissingAndPartialRefresh(t *testing.T) {
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photo-id", "name": "family.jpg", "meta": Object{"created": "2024-01-02T03:04:05.123Z", "caption": "Family", "sizes": []any{Object{"url": "https://example.invalid/old"}}}}, "d")
+	r, _ := resource(Object{"type": "file", "path": "photo-id", "name": "family.jpg", "meta": Object{"created": "2024-01-02T03:04:05.123Z", "caption": "Family", "sizes": []any{Object{"url": "https://example.invalid/old"}}}}, "d")
 	if e := s.save(r); e != nil {
 		t.Fatal(e)
 	}
-	missing, _ := resource(Object{"path": "photo-id"}, "d")
+	missing, _ := resource(Object{"type": "file", "path": "photo-id"}, "d")
 	if e := s.save(missing); e != nil {
 		t.Fatal(e)
 	}
@@ -259,7 +259,7 @@ func TestMetadataSurvivesMissingAndPartialRefresh(t *testing.T) {
 	if e != nil || got.Name != "family.jpg" || metadataFrom(got.Raw, nil).Created != "2024-01-02T03:04:05.123Z" {
 		t.Fatalf("%+v %v", got, e)
 	}
-	partial, _ := resource(Object{"path": "photo-id", "meta": Object{"sizes": []any{Object{"url": "https://example.invalid/new"}}}}, "d")
+	partial, _ := resource(Object{"type": "file", "path": "photo-id", "meta": Object{"sizes": []any{Object{"url": "https://example.invalid/new"}}}}, "d")
 	if e := s.saveMany([]Resource{partial}); e != nil {
 		t.Fatal(e)
 	}
@@ -271,7 +271,7 @@ func TestMetadataSurvivesMissingAndPartialRefresh(t *testing.T) {
 func TestMetadataZIPAndStatFingerprint(t *testing.T) {
 	c := apiFixture(t, originalAPI, map[string][]byte{"/original": zipBytes("a.png", picture(500, 500))}, nil)
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photounlim:/a.png", "name": "a.png", "created": "2024-01-02T03:04:05.123456789Z", "meta": Object{"caption": "Archive caption"}}, "day")
+	r, _ := resource(Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png", "created": "2024-01-02T03:04:05.123456789Z", "meta": Object{"caption": "Archive caption"}}, "day")
 	s.save(r)
 	got, e := c.downloadSelected(context.Background(), s, r, "original")
 	if e != nil {
@@ -312,7 +312,7 @@ func TestVersionMigrationFromPreviousSchema(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	r, _ := resource(Object{"path": "id", "name": "a"}, "d")
+	r, _ := resource(Object{"type": "file", "path": "id", "name": "a"}, "d")
 	s.save(r)
 	b, _ := json.Marshal(Result{ID: "id", Quality: "thumbnail", Bytes: 123})
 	s.DB.Exec("UPDATE files SET status='done',result=? WHERE id='id'", string(b))
@@ -342,7 +342,7 @@ func BenchmarkCollectMetadata(b *testing.B) {
 			defer s.DB.Close()
 			var resources []Resource
 			for i := 0; i < 100; i++ {
-				r, _ := resource(Object{"path": fmt.Sprint(i), "name": "a.jpg", "created": time.Now().UTC().Format(time.RFC3339Nano)}, "d")
+				r, _ := resource(Object{"type": "file", "path": fmt.Sprint(i), "name": "a.jpg", "created": time.Now().UTC().Format(time.RFC3339Nano)}, "d")
 				resources = append(resources, r)
 			}
 			b.ResetTimer()

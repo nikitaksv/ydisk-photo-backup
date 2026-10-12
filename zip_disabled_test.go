@@ -21,7 +21,7 @@ func TestZIPDisabledIsNotRateLimitAndQueueSurvives(t *testing.T) {
 	defer server.Close()
 	c := &Client{HTTP: server.Client(), Base: server.URL, BatchOriginals: true}
 	for _, id := range []string{"a", "b"} {
-		if e := s.save(Resource{ID: id, Name: id + ".png", Raw: Object{"id": id, "name": id + ".png"}}); e != nil {
+		if e := s.save(Resource{ID: id, Name: id + ".png", Raw: Object{"type": "file", "id": id, "name": id + ".png"}}); e != nil {
 			t.Fatal(e)
 		}
 		if e := s.queueOriginalZIP(id); e != nil {

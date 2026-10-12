@@ -56,7 +56,7 @@ func recoverOriginalZIP(ctx context.Context, s *Store, log func(string)) error {
 }
 
 func (s *Store) queueOriginalZIP(id string) error {
-	_, e := s.DB.Exec("INSERT OR IGNORE INTO original_zip_queue(file_id) VALUES(?)", id)
+	_, e := s.DB.Exec("INSERT OR IGNORE INTO original_zip_queue(file_id) SELECT id FROM files WHERE id=? AND "+confirmedSQL("files"), id)
 	if e != nil {
 		return &LocalError{e}
 	}
@@ -74,7 +74,7 @@ func (s *Store) queuedOriginals(start int64, video bool) ([]Resource, error) {
 	if video {
 		predicate = downloadVideoSQL
 	}
-	rows, e := s.DB.Query(`SELECT f.id,f.name,COALESCE(NULLIF(json_extract(raw,'$.size'),0),json_extract(raw,'$.meta.size'),0) FROM files f JOIN original_zip_queue q ON q.file_id=f.id WHERE q.attempted<? AND `+predicate+` AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original') ORDER BY f.id`, start)
+	rows, e := s.DB.Query(`SELECT f.id,f.name,COALESCE(NULLIF(json_extract(raw,'$.size'),0),json_extract(raw,'$.meta.size'),0) FROM files f JOIN original_zip_queue q ON q.file_id=f.id WHERE `+confirmedSQL("f")+` AND q.attempted<? AND `+predicate+` AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original') ORDER BY f.id`, start)
 	if e != nil {
 		return nil, &LocalError{e}
 	}
@@ -143,7 +143,7 @@ func (c *Client) drainOriginalZIP(ctx context.Context, s *Store, flush, video bo
 				predicate = downloadVideoSQL
 			}
 			var count int
-			e := s.DB.QueryRow(`SELECT COUNT(*) FROM original_zip_queue q JOIN files f ON f.id=q.file_id WHERE q.attempted<? AND `+predicate+` AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original')`, c.zipFallbackStart).Scan(&count)
+			e := s.DB.QueryRow(`SELECT COUNT(*) FROM original_zip_queue q JOIN files f ON f.id=q.file_id WHERE `+confirmedSQL("f")+` AND q.attempted<? AND `+predicate+` AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=f.id AND quality='original')`, c.zipFallbackStart).Scan(&count)
 			if e != nil {
 				return &LocalError{e}
 			}

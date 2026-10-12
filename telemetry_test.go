@@ -15,12 +15,12 @@ import (
 func TestRatesCountLogicalCopiesAndSeparateNetworkFromMedia(t *testing.T) {
 	now := time.Now()
 	samples := []transferSample{{at: now.Add(-time.Minute), done: 100, versions: 150, saved: 1e6, network: 2e6, requests: 10}, {at: now.Add(-10 * time.Second), done: 140, versions: 230, saved: 9e6, network: 12e6, requests: 110}, {at: now, done: 160, versions: 270, saved: 13e6, network: 22e6, requests: 210}}
-	st := Stats{Total: 760, Done: 160, Bytes: 13e6, Archives: 270, Inventory: "incomplete"}
+	st := Stats{Total: 760, Confirmed: 760, ConfirmedNoCopy: 600, Done: 160, Bytes: 13e6, Archives: 270, Inventory: "incomplete"}
 	r := transferRates(samples, st, true, false)
 	if r.FilesSecond != 1 || r.FilesMinute != 60 || r.FilesHour != 3600 || r.VersionsSecond != 2 || r.NetworkMBPS != 1 || r.SavedMBPS != 0.2 || r.RPS != 10 {
 		t.Fatal(r)
 	}
-	if r.ETASeconds == nil || *r.ETASeconds != 600 || r.ETAScope != "known_files" || r.EstimatedRemainingMediaBytes != 120e6 {
+	if r.ETASeconds == nil || *r.ETASeconds != 600 || r.ETAScope != "confirmed_files" || r.EstimatedRemainingMediaBytes != 120e6 {
 		t.Fatal(r)
 	}
 	for _, limited := range []bool{false, true} {
@@ -33,12 +33,12 @@ func TestRatesCountLogicalCopiesAndSeparateNetworkFromMedia(t *testing.T) {
 func TestRatesDoNotInventETAFromMetadataOrUpgrades(t *testing.T) {
 	now := time.Now()
 	samples := []transferSample{{at: now.Add(-time.Minute), done: 10}, {at: now, done: 10, versions: 100, saved: 100e6}}
-	r := transferRates(samples, Stats{Total: 100, Done: 10}, true, false)
+	r := transferRates(samples, Stats{Total: 100, Confirmed: 100, ConfirmedNoCopy: 90, Done: 10}, true, false)
 	if r.FilesSecond != 0 || r.ETASeconds != nil || r.ETAState != "no_progress" {
 		t.Fatal(r)
 	}
 	r = transferRates(samples, Stats{Total: 10, Done: 10, Inventory: "incomplete"}, true, false)
-	if r.ETAState != "known_complete" || r.ETAScope != "known_files" {
+	if r.ETAState != "known_complete" || r.ETAScope != "confirmed_files" {
 		t.Fatal("incomplete account falsely complete", r)
 	}
 }

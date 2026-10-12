@@ -108,7 +108,7 @@ func TestFallbackSelectsLargestReturnedPreview(t *testing.T) {
 	large, small := picture(900, 600), picture(80, 80)
 	c := apiFixture(t, originalAPI, map[string][]byte{"/large": large, "/small": small}, map[string]int{"/original": 404})
 	s := testStore(t)
-	raw := Object{"path": "photounlim:/lost.heic", "name": "lost.heic", "meta": Object{"sizes": []any{Object{"name": "S", "url": c.Base + "/small", "width": 80, "height": 80}, Object{"name": "XXL", "url": c.Base + "/large", "width": 900, "height": 600}}}}
+	raw := Object{"type": "file", "path": "photounlim:/lost.heic", "name": "lost.heic", "meta": Object{"sizes": []any{Object{"name": "S", "url": c.Base + "/small", "width": 80, "height": 80}, Object{"name": "XXL", "url": c.Base + "/large", "width": 900, "height": 600}}}}
 	r, e := resource(raw, "day")
 	if e != nil {
 		t.Fatal(e)
@@ -144,7 +144,7 @@ func TestMissingSingleFileDoesNotMarkAnotherDone(t *testing.T) {
 	c := apiFixture(t, originalAPI, map[string][]byte{"/original": zipBytes("a.png", data)}, nil)
 	s := testStore(t)
 	for _, name := range []string{"a.png", "b.png"} {
-		r, _ := resource(Object{"path": "photounlim:/" + name, "name": name}, "day")
+		r, _ := resource(Object{"type": "file", "path": "photounlim:/" + name, "name": name}, "day")
 		if e := s.save(r); e != nil {
 			t.Fatal(e)
 		}
@@ -261,7 +261,7 @@ func TestIncompleteClusterCannotProduceCompleteInventory(t *testing.T) {
 func TestResumeVerifiesAndSkipsGoodArchives(t *testing.T) {
 	c := apiFixture(t, originalAPI, map[string][]byte{"/original": zipBytes("a.png", picture(500, 500))}, nil)
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photounlim:/a.png", "name": "a.png"}, "c")
+	r, _ := resource(Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png"}, "c")
 	s.save(r)
 	got, e := c.downloadOne(context.Background(), s, r)
 	if e != nil {
@@ -309,7 +309,7 @@ func TestParallelPipelineReportsPartialAndResumes(t *testing.T) {
 		case "intapi/photo-get-snapshot":
 			return Object{"items": []any{Object{"id": "day", "size": 3}}, "total": 1}
 		case "intapi/photo-get-clusters-with-resources":
-			return Object{"resources": Object{"fetched": []any{Object{"path": "photounlim:/a.png", "name": "a.png"}, Object{"path": "photounlim:/b.png", "name": "b.png", "meta": Object{"thumbnail": url + "/thumb"}}}, "missing": []any{"photounlim:/c.png"}}}
+			return Object{"resources": Object{"fetched": []any{Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png"}, Object{"type": "file", "path": "photounlim:/b.png", "name": "b.png", "meta": Object{"thumbnail": url + "/thumb"}}}, "missing": []any{"photounlim:/c.png"}}}
 		default:
 			id := str(arr(p["items"])[0])
 			mu.Lock()
@@ -329,7 +329,7 @@ func TestParallelPipelineReportsPartialAndResumes(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if st.Done != 2 || st.Failed != 1 || st.Original != 1 || st.Thumbnail != 1 || st.Inventory != "complete" {
+	if st.Done != 2 || st.Failed != 0 || st.Unconfirmed != 1 || st.Original != 1 || st.Thumbnail != 1 || st.Inventory != "complete" {
 		t.Fatalf("%+v", st)
 	}
 	if _, e := os.Stat(filepath.Join(s.Root, "report.csv")); e != nil {
@@ -340,7 +340,7 @@ func TestParallelPipelineReportsPartialAndResumes(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if prepares["photounlim:/a.png"] != 1 || prepares["photounlim:/b.png"] != 2 || prepares["photounlim:/c.png"] != 2 {
+	if prepares["photounlim:/a.png"] != 1 || prepares["photounlim:/b.png"] != 2 || prepares["photounlim:/c.png"] != 0 {
 		t.Fatalf("resume redownloaded successes: %v", prepares)
 	}
 }
@@ -359,7 +359,7 @@ func TestRepeatedSnapshotStillCollectsKnownClusters(t *testing.T) {
 		case "intapi/photo-get-snapshot":
 			return Object{"items": []any{Object{"id": "day", "size": 1}}}
 		default:
-			return Object{"clusters": Object{"fetched": []any{Object{"id": "day", "items": []any{Object{"path": "photounlim:/a.png", "name": "a.png"}}}}}}
+			return Object{"clusters": Object{"fetched": []any{Object{"id": "day", "items": []any{Object{"type": "file", "path": "photounlim:/a.png", "name": "a.png"}}}}}}
 		}
 	}, nil, nil)
 	s := testStore(t)
@@ -424,7 +424,7 @@ func TestLockAndCookieDomains(t *testing.T) {
 }
 func TestReportContainsQualityWithoutSignedURL(t *testing.T) {
 	s := testStore(t)
-	r, _ := resource(Object{"path": "photounlim:/a.jpg", "name": "a.jpg", "preview": "https://example.invalid/?secret=hidden"}, "c")
+	r, _ := resource(Object{"type": "file", "path": "photounlim:/a.jpg", "name": "a.jpg", "preview": "https://example.invalid/?secret=hidden"}, "c")
 	s.save(r)
 	s.done(Result{ID: r.ID, Quality: "thumbnail", Bytes: 10, Width: 50, Height: 50})
 	if e := s.report(); e != nil {

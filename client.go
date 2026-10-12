@@ -41,6 +41,7 @@ type Cookie struct {
 type Client struct {
 	WebDAVToken        string // loaded from a local file; never exposed in status or logs
 	WebDAVBase         string
+	RESTBase           string
 	webDAVRejected     atomic.Bool
 	downloadStage      string // guarded by mu; stage changes only after all workers finish
 	BatchOriginals     bool
@@ -248,9 +249,11 @@ func (c *Client) requestOnce(ctx context.Context, method, uri string, body []byt
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Referer", c.Base+"/client/photo")
 	req.Header.Set("Accept-Language", "ru,en;q=0.9")
-	if c.isWebDAVURL(req.URL) && c.WebDAVToken != "" {
+	if (c.isWebDAVURL(req.URL) || c.isRESTURL(req.URL)) && c.WebDAVToken != "" {
 		req.Header.Set("Authorization", "OAuth "+c.WebDAVToken)
-		req.Header.Set("Range", "bytes=0-")
+		if c.isWebDAVURL(req.URL) {
+			req.Header.Set("Range", "bytes=0-")
+		}
 	}
 	if method == "POST" {
 		req.Header.Set("Content-Type", "application/json")
@@ -290,7 +293,7 @@ func (c *Client) requestOnce(ctx context.Context, method, uri string, body []byt
 	redirectClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		// Mobile OAuth belongs only to the WebDAV origin, never to a CDN
 		// redirect or a different host supplied by a server response.
-		if !c.isWebDAVURL(req.URL) {
+		if len(via) > 0 && (req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host) {
 			req.Header.Del("Authorization")
 		}
 		if previousRedirect != nil {
