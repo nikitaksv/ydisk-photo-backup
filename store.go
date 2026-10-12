@@ -7,7 +7,6 @@ import (
 	_ "modernc.org/sqlite"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -26,7 +25,7 @@ func openStore(root string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	_, e = db.Exec(`PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;PRAGMA busy_timeout=5000;
- CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY,cluster TEXT NOT NULL,name TEXT NOT NULL,raw TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',result TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY,confirmed INTEGER NOT NULL DEFAULT 0,cluster TEXT NOT NULL,name TEXT NOT NULL,raw TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',result TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS files_status ON files(status);
  CREATE TRIGGER IF NOT EXISTS preserve_file_metadata AFTER UPDATE OF raw ON files
  WHEN NEW.raw<>json_patch(OLD.raw,NEW.raw)
@@ -40,6 +39,48 @@ func openStore(root string) (*Store, error) {
  INSERT OR IGNORE INTO versions(file_id,quality,result,added) SELECT id,json_extract(result,'$.quality'),result,updated FROM files WHERE status='done' AND json_extract(result,'$.quality') IN ('original','preview','thumbnail');`)
 	if e != nil {
 		db.Close()
+		return nil, e
+	}
+	fileColumns, e := db.Query("PRAGMA table_info(files)")
+	if e != nil {
+		return nil, e
+	}
+	hasConfirmed := false
+	for fileColumns.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var def any
+		if e = fileColumns.Scan(&cid, &name, &typ, &notnull, &def, &pk); e != nil {
+			break
+		}
+		if name == "confirmed" {
+			hasConfirmed = true
+		}
+	}
+	if e == nil {
+		e = fileColumns.Err()
+	}
+	fileColumns.Close()
+	if e != nil {
+		return nil, e
+	}
+	if !hasConfirmed {
+		tx, te := db.Begin()
+		if te != nil {
+			return nil, te
+		}
+		if _, te = tx.Exec("ALTER TABLE files ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0"); te == nil {
+			_, te = tx.Exec("UPDATE files SET confirmed=1 WHERE COALESCE(" + fileMetadataSQL + ",0) OR EXISTS(SELECT 1 FROM versions WHERE file_id=files.id)")
+		}
+		if te != nil {
+			tx.Rollback()
+			return nil, te
+		}
+		if te = tx.Commit(); te != nil {
+			return nil, te
+		}
+	}
+	if _, e = db.Exec("CREATE INDEX IF NOT EXISTS files_confirmed ON files(confirmed)"); e != nil {
 		return nil, e
 	}
 	rows, e := db.Query("PRAGMA table_info(versions)")
@@ -91,8 +132,9 @@ func (s *Store) get(k string) string {
 
 // Promoting an unresolved reference is a metadata event, never a downloaded
 // file. Old reference-probe failures must not become confirmed-file failures.
-var promotionSQL = "NOT COALESCE(" + fileMetadataSQL + ",0) AND COALESCE(" + strings.ReplaceAll(fileMetadataSQL, "raw", "excluded.raw") + ",0) AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id)"
-var upsertFile = `INSERT INTO files(id,cluster,name,raw,updated) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET cluster=excluded.cluster,name=excluded.name,status=CASE WHEN ` + promotionSQL + ` THEN 'pending' ELSE files.status END,error=CASE WHEN ` + promotionSQL + ` THEN '' ELSE files.error END,raw=excluded.raw,updated=excluded.updated`
+const promotionSQL = "files.confirmed=0 AND excluded.confirmed=1 AND NOT EXISTS(SELECT 1 FROM versions WHERE file_id=files.id)"
+
+var upsertFile = `INSERT INTO files(id,cluster,name,raw,updated,confirmed) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET cluster=excluded.cluster,name=excluded.name,status=CASE WHEN ` + promotionSQL + ` THEN 'pending' ELSE files.status END,error=CASE WHEN ` + promotionSQL + ` THEN '' ELSE files.error END,confirmed=MAX(files.confirmed,excluded.confirmed),raw=excluded.raw,updated=excluded.updated`
 
 func fileArgs(r Resource) []any {
 	raw := r.Raw
@@ -100,7 +142,11 @@ func fileArgs(r Resource) []any {
 		raw = Object{"path": r.ID, "name": r.Name}
 	}
 	b, _ := json.Marshal(raw)
-	return []any{r.ID, r.Cluster, r.Name, string(b), time.Now().UTC().Format(time.RFC3339Nano)}
+	confirmed := str(raw["type"]) == "file" || r.Size > 0 || len(r.Candidates) > 0
+	if !confirmed {
+		confirmed = num(raw["size"]) > 0 || num(obj(raw["meta"])["size"]) > 0 || len(previewCandidates(raw)) > 0
+	}
+	return []any{r.ID, r.Cluster, r.Name, string(b), time.Now().UTC().Format(time.RFC3339Nano), confirmed}
 }
 func (s *Store) save(r Resource) error { _, e := s.DB.Exec(upsertFile, fileArgs(r)...); return e }
 func (s *Store) saveMany(resources []Resource) error {
@@ -227,7 +273,7 @@ func (s *Store) done(r Result) error {
 	if e := tx.QueryRow(bestVersion, r.ID).Scan(&best); e != nil {
 		return e
 	}
-	if _, e := tx.Exec("UPDATE files SET status='done',result=?,error='' WHERE id=?", best, r.ID); e != nil {
+	if _, e := tx.Exec("UPDATE files SET confirmed=1,status='done',result=?,error='' WHERE id=?", best, r.ID); e != nil {
 		return e
 	}
 	return tx.Commit()
@@ -299,7 +345,7 @@ func (s *Store) removeVersion(id, q, reason string) error {
 	if e == sql.ErrNoRows {
 		_, e = tx.Exec("UPDATE files SET status='pending',result='{}',error=? WHERE id=?", reason, id)
 	} else if e == nil {
-		_, e = tx.Exec("UPDATE files SET status='done',result=?,error=? WHERE id=?", best, reason, id)
+		_, e = tx.Exec("UPDATE files SET confirmed=1,status='done',result=?,error=? WHERE id=?", best, reason, id)
 	}
 	if e != nil {
 		return e

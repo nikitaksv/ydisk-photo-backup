@@ -22,7 +22,7 @@ import (
 //go:embed ui/*
 var ui embed.FS
 
-const buildVersion = "2026-10-12.records.1"
+const buildVersion = "2026-10-12.records.2"
 
 type Job struct {
 	mu             sync.Mutex

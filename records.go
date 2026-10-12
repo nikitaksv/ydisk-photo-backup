@@ -153,7 +153,7 @@ func (c *Client) reconcileREST(ctx context.Context, s *Store) (int, error) {
 }
 
 func confirmedSQL(alias string) string {
-	return "(COALESCE(" + fileMetadataSQL + ",0) OR EXISTS(SELECT 1 FROM versions known_copy WHERE known_copy.file_id=" + alias + ".id))"
+	return "(" + alias + ".confirmed=1)"
 }
 
 // This is deliberately outside the download stages. Keep every unresolved

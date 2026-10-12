@@ -66,6 +66,8 @@ func str(v any) string {
 		return string(x)
 	case float64:
 		return strconv.FormatFloat(x, 'f', -1, 64)
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprint(x)
 	}
 	return ""
 }

@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -178,6 +180,49 @@ func TestETAExcludesUnconfirmedReferences(t *testing.T) {
 	r := transferRates(samples, Stats{Total: 3000, Records: 3000, Confirmed: 80, Done: 70, ConfirmedNoCopy: 10, Unconfirmed: 2920}, true, false)
 	if r.Remaining != 10 || r.ETASeconds == nil || *r.ETASeconds != 10 || r.ETAScope != "confirmed_files" {
 		t.Fatal(r)
+	}
+}
+
+func TestLegacyCatalogMigrationKeepsCopiesAndReferenceClassification(t *testing.T) {
+	root := t.TempDir()
+	db, e := sql.Open("sqlite", filepath.Join(root, "state.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = db.Exec(`CREATE TABLE files(id TEXT PRIMARY KEY,cluster TEXT NOT NULL,name TEXT NOT NULL,raw TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',result TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL)`)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, row := range []struct{ id, raw, status, result string }{
+		{"saved", `{"path":"saved"}`, "done", `{"id":"saved","quality":"preview","bytes":10}`},
+		{"known", `{"path":"known","type":"file","size":100}`, "pending", `{}`},
+		{"ref", `{"id":"ref","itemId":"ref","width":1000}`, "failed", `{}`},
+	} {
+		if _, e = db.Exec("INSERT INTO files(id,cluster,name,raw,status,result,updated) VALUES(?,'day',?,?,?,?,?)", row.id, row.id, row.raw, row.status, row.result, "now"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	db.Close()
+	s, e := openStore(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.DB.Close()
+	st, e := s.stats()
+	if e != nil || st.Records != 3 || st.Confirmed != 2 || st.Done != 1 || st.Unconfirmed != 1 || st.Failed != 0 || st.ConfirmedNoCopy != 1 {
+		t.Fatal(st, e)
+	}
+	if e = s.DB.Close(); e != nil {
+		t.Fatal(e)
+	}
+	s, e = openStore(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.DB.Close()
+	st, e = s.stats()
+	if e != nil || st.Confirmed != 2 || st.Done != 1 || st.Unconfirmed != 1 {
+		t.Fatal("classification changed after reopening", st, e)
 	}
 }
 

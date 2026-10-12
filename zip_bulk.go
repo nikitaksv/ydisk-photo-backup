@@ -322,7 +322,7 @@ func (s *Store) commitZIPBatch(b zipBatchRecord, results []Result, missing int) 
 		if e := tx.QueryRow(bestVersion, r.ID).Scan(&best); e != nil {
 			return &LocalError{e}
 		}
-		if _, e := tx.Exec("UPDATE files SET status='done',result=?,error='' WHERE id=?", best, r.ID); e != nil {
+		if _, e := tx.Exec("UPDATE files SET confirmed=1,status='done',result=?,error='' WHERE id=?", best, r.ID); e != nil {
 			return &LocalError{e}
 		}
 	}
