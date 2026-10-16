@@ -370,3 +370,26 @@ func TestIncrementalCatalogRefreshesChangedNewAndIncompleteClusters(t *testing.T
 		t.Fatal(st)
 	}
 }
+
+func TestLiveVerificationReturnsLostVersionToQueue(t *testing.T) {
+	s := testStore(t)
+	r, _ := resource(Object{"type": "file", "path": "a", "name": "a.jpg"}, "")
+	s.save(r)
+	s.done(Result{ID: "a", Quality: "original", Bytes: 1, Archive: "archives/missing.zip"})
+	q := &liveQueue{tasks: map[string]*liveTask{}}
+	if e := q.reload(s); e != nil {
+		t.Fatal(e)
+	}
+	if q.snapshot().Originals != 0 {
+		t.Fatal("saved original was requeued")
+	}
+	if e := verifyVersions(context.Background(), s, false, func(string) { q.reloadMu.Lock(); q.loaded = false; q.reloadMu.Unlock() }); e != nil {
+		t.Fatal(e)
+	}
+	if e := q.reload(s); e != nil {
+		t.Fatal(e)
+	}
+	if q.snapshot().Originals != 1 {
+		t.Fatal("missing original was not requeued")
+	}
+}

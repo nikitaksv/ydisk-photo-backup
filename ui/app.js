@@ -73,7 +73,7 @@ function render(d){
 	 document.querySelectorAll('.tempo,.forecast').forEach(node=>node.hidden=!active);document.querySelector('.headline').classList.toggle('inactive',!active);hide('speedScope',!active);
  text('connection','● live');$('connection').className='connection';text('out',d.out);$('out').title=d.out;
  text('phase',phases[d.phase]||d.phase);$('dot').className='dot '+(paused||d.phase==='attention'?'paused':active?'':'idle');
- text('stageNote',active?'':d.watching?'непрерывная загрузка включена':'');
+ text('stageNote',active?(d.live?.verifying_archives?'проверка сохранённых архивов в фоне':''):d.watching?'непрерывная загрузка включена':'');
  let notice=paused?'HTTP 429 · общая пауза до '+time(r.limited_until)+' МСК · '+r.interval_ms+' мс между запросами':d.phase==='attention'?d.message:'';
  text('notice',notice);hide('notice',!notice);
  text('done',fmt(s.done));text('total',fmt(confirmed));text('percent',confirmed?fmt(s.done/confirmed*100,1)+'%':'');$('bar').max=Math.max(confirmed,1);$('bar').value=s.done;

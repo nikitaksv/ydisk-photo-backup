@@ -170,11 +170,11 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 	if mode == "reconcile" {
 		return c.reconcileReferences(ctx, s, true, log)
 	}
-	if e := verifyVersions(ctx, s, false, log); e != nil {
-		return e
-	}
 	if mode == "live" {
 		return runContinuous(ctx, s, c, workers, log)
+	}
+	if e := verifyVersions(ctx, s, false, log); e != nil {
+		return e
 	}
 	var collectErr error
 	if mode == "resume" || strings.HasPrefix(mode, "zip") {

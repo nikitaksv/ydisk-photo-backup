@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +44,7 @@ type LiveStatus struct {
 	NextRetry        string `json:"next_retry,omitempty"`
 	NextInventory    string `json:"next_inventory_check,omitempty"`
 	InventoryRunning bool   `json:"inventory_running"`
+	Verifying        bool   `json:"verifying_archives"`
 }
 
 type liveQueue struct {
@@ -59,6 +62,7 @@ type liveQueue struct {
 	zipUntil         time.Time
 	nextInventory    time.Time
 	inventoryRunning bool
+	verifying        bool
 }
 
 func taskKey(id, stage string) string { return stage + "\x00" + id }
@@ -78,7 +82,7 @@ func mediaIndex(video bool) int {
 func (q *liveQueue) snapshot() LiveStatus {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	r := LiveStatus{Workers: q.workers, PreviewWorkers: q.active[0], OriginalWorkers: q.active[1], InventoryRunning: q.inventoryRunning}
+	r := LiveStatus{Workers: q.workers, PreviewWorkers: q.active[0], OriginalWorkers: q.active[1], InventoryRunning: q.inventoryRunning, Verifying: q.verifying}
 	if !q.nextInventory.IsZero() {
 		r.NextInventory = q.nextInventory.Format(time.RFC3339)
 	}
@@ -397,7 +401,33 @@ func runContinuous(ctx context.Context, s *Store, c *Client, workers int, log fu
 	var bg sync.WaitGroup
 	defer bg.Wait()
 	defer cancel()
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
+	var verified atomic.Bool
+	q.mu.Lock()
+	q.verifying = true
+	q.mu.Unlock()
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		e := verifyVersions(ctx, s, false, func(message string) {
+			if strings.HasPrefix(message, "Повторить версию ") {
+				q.reloadMu.Lock()
+				q.loaded = false
+				q.reloadMu.Unlock()
+			}
+			log(message)
+		})
+		if e != nil {
+			if ctx.Err() == nil {
+				errCh <- &LocalError{e}
+			}
+			return
+		}
+		q.mu.Lock()
+		q.verifying = false
+		q.mu.Unlock()
+		verified.Store(true)
+	}()
 	bg.Add(1)
 	go func() { defer bg.Done(); errCh <- runLiveWorkers(ctx, s, c, q, workers, log) }()
 	bg.Add(1)
@@ -468,7 +498,7 @@ func runContinuous(ctx context.Context, s *Store, c *Client, workers int, log fu
 			if e != nil {
 				return &LocalError{e}
 			}
-			if st.Confirmed > 0 && st.NoOriginal == 0 && st.NoPreview == 0 && st.Unconfirmed == 0 && st.Inventory == "complete" {
+			if verified.Load() && st.Confirmed > 0 && st.NoOriginal == 0 && st.NoPreview == 0 && st.Unconfirmed == 0 && st.Inventory == "complete" {
 				log("Все подтверждённые оригиналы и превью сохранены; полный список подтверждён.")
 				return s.report()
 			}
