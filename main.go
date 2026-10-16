@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"text/tabwriter"
-	"time"
 )
 
 func main() {
@@ -38,7 +37,7 @@ func entry() error {
 	workers := fs.Int("workers", 12, "параллельных загрузок, 1..32")
 	zipSize := fs.Int("batch-size", 500, "фотографий в серверном ZIP, 1..500")
 	zipLimit := fs.Int("max-batches", 0, "ограничить ZIP-пробу числом пачек; 0 — все пачки")
-	interval := fs.Duration("interval", 6*time.Hour, "интервал фоновой проверки, например 6h")
+	zipEnabled := fs.Bool("zip-enabled", false, "серверные ZIP до 500 файлов; по умолчанию выключены")
 	filter := fs.String("filter", "all", "all, saved, confirmed, unconfirmed, records-all, missing-original, missing-preview, missing-thumbnail, no-copy, failed, pending, preview-best, thumbnail-best")
 	limit := fs.Int("limit", 50, "файлов на странице списка (1..100)")
 	offset := fs.Int("offset", 0, "смещение списка")
@@ -68,6 +67,18 @@ func entry() error {
 		return e
 	}
 	defer s.DB.Close()
+	var settingsErr error
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "zip-enabled" {
+			settingsErr = s.set("zip_enabled", fmt.Sprint(*zipEnabled))
+		}
+	})
+	if settingsErr != nil {
+		return settingsErr
+	}
+	if command == "zip" && s.get("zip_enabled") != "true" {
+		return fmt.Errorf("серверный ZIP выключен; включи -zip-enabled=true")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	log := func(msg string) { fmt.Println(msg) }
@@ -103,10 +114,7 @@ func entry() error {
 		}
 		return e
 	case "watch":
-		if *interval < time.Minute {
-			return fmt.Errorf("интервал: не меньше 1m")
-		}
-		return watchBackup(ctx, s, *cookies, *workers, *interval, log)
+		return runSelected(ctx, s, *cookies, *workers, "resume", log, nil)
 	case "status", "stats":
 		st, e := s.stats()
 		if e != nil {

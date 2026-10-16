@@ -7,6 +7,10 @@ import (
 )
 
 func (c *Client) collect(ctx context.Context, s *Store, log func(string)) error {
+	return c.collectCatalog(ctx, s, false, log)
+}
+
+func (c *Client) collectCatalog(ctx context.Context, s *Store, incremental bool, log func(string)) error {
 	if e := s.set("inventory", "incomplete"); e != nil {
 		return e
 	}
@@ -75,16 +79,63 @@ func (c *Client) collect(ctx context.Context, s *Store, log func(string)) error 
 		}
 	}
 	log(fmt.Sprintf("Найдено дней/кластеров: %d", len(clusters)))
+	type clusterCount struct{ total, unknown int64 }
+	known := map[string]clusterCount{}
+	if incremental {
+		rows, e := s.DB.Query("SELECT cluster,COUNT(*),SUM(CASE WHEN confirmed=0 THEN 1 ELSE 0 END) FROM files GROUP BY cluster")
+		if e != nil {
+			return &LocalError{e}
+		}
+		for rows.Next() {
+			var id string
+			var n clusterCount
+			if e = rows.Scan(&id, &n.total, &n.unknown); e != nil {
+				rows.Close()
+				return &LocalError{e}
+			}
+			known[id] = n
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return &LocalError{e}
+		}
+	}
+	refreshed, cached := 0, 0
+	probeStart := int(num(s.get("inventory_probe_cursor"))) % max(1, len(clusters))
+	probe := map[string]bool{}
+	for n := 0; incremental && n < min(64, len(clusters)); n++ {
+		probe[str(clusters[(probeStart+n)%len(clusters)]["id"])] = true
+	}
 	for i, cl := range clusters {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
 		id := str(cl["id"])
 		expected := num(cl["size"])
-		if e := s.set("cluster_size:"+id, fmt.Sprint(expected)); e != nil {
-			return &LocalError{e}
+		previousSize := s.get("cluster_size:" + id)
+		revision := ""
+		for _, key := range []string{"revision", "version", "mtime", "modified", "updated", "hash"} {
+			if value := str(cl[key]); value != "" {
+				revision += key + "=" + value + ";"
+			}
 		}
-		e := c.collectCluster(ctx, s, psid, id, expected)
+		previousRevision := s.get("cluster_revision:" + id)
+		if previousSize != fmt.Sprint(expected) {
+			if e := s.set("cluster_size:"+id, fmt.Sprint(expected)); e != nil {
+				return &LocalError{e}
+			}
+		}
+		n := known[id]
+		// APIs without a revision need rotating checks to catch same-count replacements.
+		unchanged := incremental && expected > 0 && n.total >= expected && n.unknown == 0 && previousSize == fmt.Sprint(expected) && (previousRevision == "" || previousRevision == revision) && !(revision == "" && probe[id])
+		var e error
+		if unchanged {
+			cached++
+		} else {
+			refreshed++
+			e = c.collectCluster(ctx, s, psid, id, expected)
+		}
 		if e != nil {
 			if fatal(e) || ctx.Err() != nil {
 				return e
@@ -92,9 +143,20 @@ func (c *Client) collect(ctx context.Context, s *Store, log func(string)) error 
 			problems = append(problems, fmt.Sprintf("кластер %s: %v", id, e))
 			log(fmt.Sprintf("Не удалось полностью прочитать кластер %d: %v", i+1, e))
 		}
-		if i%10 == 0 || i == len(clusters)-1 {
+		if e == nil && previousRevision != revision {
+			if e = s.set("cluster_revision:"+id, revision); e != nil {
+				return &LocalError{e}
+			}
+		}
+		if !incremental && i%10 == 0 || incremental && i%100 == 0 || i == len(clusters)-1 {
 			log(fmt.Sprintf("Список: %d / %d кластеров", i+1, len(clusters)))
 		}
+	}
+	if incremental {
+		if e := s.set("inventory_probe_cursor", fmt.Sprint((probeStart+64)%max(1, len(clusters)))); e != nil {
+			return &LocalError{e}
+		}
+		log(fmt.Sprintf("Каталог обновлён: %d кластеров прочитано, %d без изменений; скачивание не прерывалось.", refreshed, cached))
 	}
 	if len(problems) > 0 {
 		if e := s.set("inventory_error", fmt.Sprintf("Ошибок обхода: %d; %s", len(problems), problems[0])); e != nil {

@@ -22,7 +22,7 @@ import (
 //go:embed ui/*
 var ui embed.FS
 
-const buildVersion = "2026-10-12.records.2"
+const buildVersion = "2026-10-16.live.1"
 
 type Job struct {
 	mu             sync.Mutex
@@ -67,15 +67,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		return e
 	}
 	token := hex.EncodeToString(key)
-	interval, e := time.ParseDuration(s.get("watch_interval"))
-	if e != nil || interval < time.Minute {
-		interval = 6 * time.Hour
-	}
-	next, _ := time.Parse(time.RFC3339, s.get("watch_next"))
-	if next.IsZero() {
-		next = time.Now().Add(interval)
-	}
-	job := &Job{phase: "idle", message: "Выбери cookies.json, затем запусти архивирование.", watching: s.get("watch_enabled") == "true", interval: interval, next: next}
+	job := &Job{phase: "idle", message: "Подключи аккаунт и запусти непрерывную загрузку.", watching: s.get("watch_enabled") == "true", interval: inventoryInterval, next: time.Now()}
 	metrics := &Telemetry{}
 	go metrics.run(ctx, s, job)
 	go metrics.runStorage(ctx, s.Root)
@@ -101,13 +93,13 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 			job.mu.Unlock()
 			return errors.New("сначала загрузи cookies.json")
 		}
-		if mode == "zip" {
+		if mode != "check" && mode != "reconcile" && mode != "zip-test" {
 			if e := s.set("watch_enabled", "true"); e != nil {
 				job.mu.Unlock()
 				return errors.New("не удалось включить периодическую проверку")
 			}
 			job.watching = true
-			job.next = time.Now().Add(job.interval)
+			job.next = time.Now().Add(30 * time.Second)
 		}
 		workCtx, cancel := context.WithCancel(ctx)
 		job.cancel = cancel
@@ -125,7 +117,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		if strings.HasPrefix(mode, "zip") {
 			job.phase = "zipping"
 		}
-		job.message = "Работа идёт. Каждая версия сохраняется отдельно."
+		job.message = "Превью и оригиналы скачиваются одновременно. Готовые версии сохраняются независимо."
 		job.mu.Unlock()
 		go func() {
 			defer close(finished)
@@ -183,13 +175,13 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 				if e != nil && fatal(e) && !errors.Is(e, context.Canceled) {
 					job.watching = false
 					s.set("watch_enabled", "false")
-					job.message += " Фоновая проверка приостановлена; устрани причину и включи её снова."
+					job.message += " Непрерывная загрузка приостановлена; устрани причину и продолжи."
 				} else if mode != "check" && st.Total > 0 && st.NoOriginal == 0 && st.NoPreview == 0 && st.Unconfirmed == 0 && st.Inventory == "complete" {
 					job.watching = false
 					s.set("watch_enabled", "false")
-					job.message += " Все оригиналы и превью получены; периодическая проверка завершена."
+					job.message += " Все оригиналы и превью получены; список полный."
 				} else {
-					job.next = time.Now().Add(job.interval)
+					job.next = time.Now().Add(30 * time.Second)
 					s.set("watch_next", job.next.Format(time.RFC3339))
 				}
 			}
@@ -213,12 +205,17 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		rate := RateStatus{}
+		live := LiveStatus{}
 		stage := ""
 		if job.client != nil {
 			rate = job.client.rateStatus()
 			job.client.mu.Lock()
 			stage = job.client.downloadStage
+			queue := job.client.live
 			job.client.mu.Unlock()
+			if queue != nil {
+				live = queue.snapshot()
+			}
 		}
 		phase, message := job.phase, job.message
 		if phase == "zipping" && (zipProgress.Stage == "completed" || zipProgress.Stage == "deferred") {
@@ -231,7 +228,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 			phase = "rate_limited"
 			message = "Яндекс ограничил запросы. Все новые запросы ждут общей паузы; файлы остаются в очереди."
 		}
-		writeJSON(w, Object{"build": buildVersion, "webdav_configured": oe == nil, "download_stage": stage, "transfer": transfer, "storage": storage, "zip": zipProgress, "rate": rate, "stats": st, "running": job.running, "phase": phase, "message": message, "logs": job.logs, "out": s.Root, "cookies": ce == nil, "token": token, "watching": job.watching, "watch_interval_minutes": int(job.interval / time.Minute), "next_check": job.next.Format(time.RFC3339)})
+		writeJSON(w, Object{"live": live, "zip_enabled": s.get("zip_enabled") == "true", "inventory_interval_minutes": 30, "next_inventory_check": live.NextInventory, "build": buildVersion, "webdav_configured": oe == nil, "download_stage": stage, "transfer": transfer, "storage": storage, "zip": zipProgress, "rate": rate, "stats": st, "running": job.running, "phase": phase, "message": message, "logs": job.logs, "out": s.Root, "cookies": ce == nil, "token": token, "watching": job.watching, "watch_interval_minutes": int(job.interval / time.Minute), "next_check": job.next.Format(time.RFC3339)})
 	})
 	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -308,6 +305,10 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				http.Error(w, "method", 405)
+				return
+			}
+			if s.get("zip_enabled") != "true" {
+				http.Error(w, "сначала включи серверный ZIP в настройках", 409)
 				return
 			}
 			config := ZIPOptions{BatchSize: 500}
@@ -400,6 +401,43 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		job.log(fmt.Sprintf("Базовый интервал всех потоков: %d мс. При повторных 429 ускорение автоматически отменяется.", config.IntervalMS))
 		writeJSON(w, Object{"ok": true, "rate": client.rateStatus()})
 	})
+	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method", 405)
+			return
+		}
+		var config struct {
+			ZIPEnabled *bool `json:"zip_enabled"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		if json.NewDecoder(r.Body).Decode(&config) != nil || config.ZIPEnabled == nil {
+			http.Error(w, "нужен zip_enabled", 400)
+			return
+		}
+		if e := s.set("zip_enabled", strconv.FormatBool(*config.ZIPEnabled)); e != nil {
+			http.Error(w, "ошибка настроек", 500)
+			return
+		}
+		job.mu.Lock()
+		client := job.client
+		job.mu.Unlock()
+		if client != nil {
+			client.ZIPEnabled.Store(*config.ZIPEnabled)
+			client.mu.Lock()
+			queue := client.live
+			client.mu.Unlock()
+			if *config.ZIPEnabled && queue != nil {
+				queue.mu.Lock()
+				queue.zipUntil = time.Time{}
+				queue.mu.Unlock()
+			}
+		}
+		if *config.ZIPEnabled {
+			s.set("zip_disabled_until", "")
+		}
+		job.log(fmt.Sprintf("Серверные ZIP: %t; при недоступности — прямое скачивание.", *config.ZIPEnabled))
+		writeJSON(w, Object{"ok": true})
+	})
 	mux.HandleFunc("/api/watch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "method", 405)
@@ -407,37 +445,23 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 		}
 		var config struct {
 			Enabled bool `json:"enabled"`
-			Minutes int  `json:"interval_minutes"`
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		if e := json.NewDecoder(r.Body).Decode(&config); e != nil {
+		if json.NewDecoder(r.Body).Decode(&config) != nil {
 			http.Error(w, "неверные настройки", 400)
 			return
 		}
-		if config.Minutes < 1 || config.Minutes > 43200 {
-			http.Error(w, "интервал: 1..43200 минут", 400)
-			return
-		}
-		st, e := s.stats()
-		if e != nil {
-			http.Error(w, "ошибка БД", 500)
-			return
-		}
-		if config.Enabled && st.Total == 0 {
-			http.Error(w, "сначала собери список и запусти скачивание", 400)
-			return
-		}
-		job.mu.Lock()
-		defer job.mu.Unlock()
-		job.watching = config.Enabled
-		job.interval = time.Duration(config.Minutes) * time.Minute
-		job.next = time.Now()
 		if e := s.set("watch_enabled", strconv.FormatBool(config.Enabled)); e != nil {
 			http.Error(w, "ошибка настроек", 500)
 			return
 		}
-		s.set("watch_interval", job.interval.String())
-		s.set("watch_next", job.next.Format(time.RFC3339))
+		job.mu.Lock()
+		job.watching = config.Enabled
+		job.next = time.Now()
+		if !config.Enabled && job.cancel != nil {
+			job.cancel()
+		}
+		job.mu.Unlock()
 		writeJSON(w, Object{"ok": true})
 	})
 	mux.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) {
@@ -446,6 +470,8 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 			return
 		}
 		job.mu.Lock()
+		job.watching = false
+		s.set("watch_enabled", "false")
 		if job.cancel != nil {
 			job.cancel()
 		}
@@ -531,7 +557,7 @@ func serve(ctx context.Context, s *Store, cookies string, workers int, listen st
 				job.mu.Lock()
 				due := job.watching && !job.running && !time.Now().Before(job.next)
 				if due {
-					job.next = time.Now().Add(job.interval)
+					job.next = time.Now().Add(30 * time.Second)
 				}
 				job.mu.Unlock()
 				if due {

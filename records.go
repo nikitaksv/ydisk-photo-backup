@@ -188,7 +188,9 @@ func (c *Client) reconcileReferences(ctx context.Context, s *Store, force bool, 
 		return nil
 	}
 	c.mu.Lock()
-	c.downloadStage = "records"
+	if !c.Continuous {
+		c.downloadStage = "records"
+	}
 	c.mu.Unlock()
 	cursor := s.get("records_check_cursor")
 	start := 0

@@ -36,6 +36,7 @@ func openStore(root string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS versions(file_id TEXT NOT NULL,quality TEXT NOT NULL,result TEXT NOT NULL,added TEXT NOT NULL,PRIMARY KEY(file_id,quality));
  CREATE TABLE IF NOT EXISTS record_checks(file_id TEXT PRIMARY KEY,result TEXT NOT NULL,checked TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS version_errors(file_id TEXT NOT NULL,quality TEXT NOT NULL,error TEXT NOT NULL,checked TEXT NOT NULL,PRIMARY KEY(file_id,quality));
+ CREATE TABLE IF NOT EXISTS download_retries(file_id TEXT NOT NULL,quality TEXT NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,PRIMARY KEY(file_id,quality));
  INSERT OR IGNORE INTO versions(file_id,quality,result,added) SELECT id,json_extract(result,'$.quality'),result,updated FROM files WHERE status='done' AND json_extract(result,'$.quality') IN ('original','preview','thumbnail');`)
 	if e != nil {
 		db.Close()

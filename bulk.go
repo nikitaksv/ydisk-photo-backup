@@ -48,6 +48,13 @@ func (c *Client) processBatchStage(ctx context.Context, s *Store, resources []Re
 		r.FailedURLs = make(map[string]error)
 		var last error
 		for _, quality := range qualities {
+			if quality == "thumbnail" {
+				// The original pool may have saved a copy while the preview failed.
+				present, e = s.versions(r.ID)
+				if e != nil {
+					return e
+				}
+			}
 			// A thumbnail is a fallback copy, never extra work after a preview
 			// or an already saved original. Existing thumbnails are retained.
 			_, hasPreview := present["preview"]
@@ -69,7 +76,7 @@ func (c *Client) processBatchStage(ctx context.Context, s *Store, resources []Re
 				if e := s.attempt(r.ID, quality, e); e != nil {
 					return e
 				}
-				if quality == "original" && c.BatchOriginals {
+				if quality == "original" && c.BatchOriginals && (!c.Continuous || c.ZIPEnabled.Load()) {
 					if e := s.queueOriginalZIP(r.ID); e != nil {
 						return e
 					}

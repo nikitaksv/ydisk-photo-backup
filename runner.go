@@ -83,6 +83,11 @@ func runSelected(ctx context.Context, s *Store, cookies string, workers int, mod
 		log("Оригиналы: прямой WebDAV GET с OAuth, как в Android; затем доступные веб-ссылки.")
 	}
 	c.BatchOriginals = true
+	c.ZIPEnabled.Store(s.get("zip_enabled") == "true")
+	if mode == "run" || mode == "resume" || mode == "upgrade" || mode == "zip" {
+		mode = "live"
+		c.Continuous = true
+	}
 	c.FreshLinks = newLinkRefresher()
 	c.zipFallbackStart = time.Now().UnixNano()
 	var savedRate RateStatus
@@ -112,7 +117,11 @@ func runSelected(ctx context.Context, s *Store, cookies string, workers int, mod
 		return e
 	}
 	if !strings.HasPrefix(mode, "zip") {
-		if e := s.saveZIPStatus(ZIPStatus{Stage: "accumulating", BatchSize: 500}); e != nil {
+		stage := "disabled"
+		if c.ZIPEnabled.Load() {
+			stage = "accumulating"
+		}
+		if e := s.saveZIPStatus(ZIPStatus{Stage: stage, BatchSize: 500}); e != nil {
 			return e
 		}
 	}
@@ -163,6 +172,9 @@ func runInventory(ctx context.Context, s *Store, c *Client, workers int, mode st
 	}
 	if e := verifyVersions(ctx, s, false, log); e != nil {
 		return e
+	}
+	if mode == "live" {
+		return runContinuous(ctx, s, c, workers, log)
 	}
 	var collectErr error
 	if mode == "resume" || strings.HasPrefix(mode, "zip") {

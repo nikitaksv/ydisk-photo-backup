@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 )
 
 func (c *Client) refreshKnown(ctx context.Context, s *Store, log func(string)) error {
@@ -53,28 +52,4 @@ func (c *Client) refreshKnown(ctx context.Context, s *Store, log func(string)) e
 		}
 	}
 	return firstError
-}
-func watchBackup(ctx context.Context, s *Store, cookies string, workers int, interval time.Duration, log func(string)) error {
-	for {
-		log("Фоновая проверка: сначала недостающие превью, затем оригиналы…")
-		e := runMode(ctx, s, cookies, workers, true, log)
-		if e != nil {
-			if fatal(e) {
-				return e
-			}
-			log(e.Error())
-		}
-		st, se := s.stats()
-		if se != nil {
-			return se
-		}
-		if st.NoOriginal == 0 && st.NoPreview == 0 && st.Unconfirmed == 0 && st.Inventory == "complete" {
-			log("Все известные файлы имеют оригиналы и превью; проверка завершена.")
-			return nil
-		}
-		log("Следующая проверка: " + time.Now().Add(interval).Format(time.RFC3339))
-		if e := waitContext(ctx, interval); e != nil {
-			return e
-		}
-	}
 }

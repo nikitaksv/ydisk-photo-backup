@@ -5,7 +5,6 @@ const bytes=n=>n>=1e9?fmt(n/1e9,2)+' ГБ':n>=1e6?fmt(n/1e6,1)+' МБ':fmt(n/1e3
 const time=iso=>new Date(iso).toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit',second:'2-digit'});
 const dateTime=iso=>new Date(iso).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
 const duration=s=>{let m=Math.max(1,Math.round(s/60));return m>=1440?Math.floor(m/1440)+' д '+Math.floor(m%1440/60)+' ч':m>=60?Math.floor(m/60)+' ч '+m%60+' мин':m+' мин'};
-const interval=m=>m%1440===0?m/1440+' д':m%60===0?m/60+' ч':m+' мин';
 const text=(id,value)=>{const node=$(id);if(node.textContent!==String(value))node.textContent=value};
 const hide=(id,hidden=true)=>$(id).hidden=hidden;
 const store=(key,value)=>{try{localStorage.setItem('photoslice.'+key,value)}catch{}};
@@ -14,7 +13,7 @@ let snapshot=null,token='',view='overview',offset=0,listTotal=0,lastList=0,refre
 const speedHistory=[];
 const views=['overview','files','journal','settings'];
 const pageSize=25;
-const phases={idle:'Готов к запуску',running:'Скачивание',previews:'Превью · первый проход',originals:'Оригиналы · второй проход',records:'Проверка неподтверждённых записей',zipping:'Пакетная загрузка ZIP',rate_limited:'Пауза Яндекса',upgrading:'Проверка качества',checking:'Проверка входа',completed:'Проход завершён',stopped:'Остановлено',attention:'Требуется внимание'};
+const phases={idle:'Готов к запуску',running:'Скачивание',live:'Превью + оригиналы · непрерывно',previews:'Превью',originals:'Оригиналы',records:'Проверка неподтверждённых записей',zipping:'Пакетная загрузка ZIP',rate_limited:'Пауза Яндекса',upgrading:'Проверка качества',checking:'Проверка входа',completed:'Проход завершён',stopped:'Остановлено',attention:'Требуется внимание'};
 function switchView(next,focus=false){
  if(!views.includes(next))next='overview';view=next;store('view',next);
  for(const name of views){hide('view-'+name,name!==next);const tab=$('tab-'+name);tab.setAttribute('aria-selected',String(name===next));tab.tabIndex=name===next?0:-1}
@@ -47,12 +46,12 @@ function renderSpeed(d){
 }
 function renderZIP(d){
  const z=d.zip||{},queued=z.queued||0,unavailable=z.stage==='unavailable',previewPass=d.running&&d.download_stage==='previews',inFlight=!previewPass&&['preparing','downloading','verifying'].includes(z.stage),deferred=z.stage==='deferred'&&queued>0;
- hide('zipLine',!queued&&!inFlight&&!z.archives);
+ hide('zipLine',!d.zip_enabled||!queued&&!inFlight&&!z.archives);
  text('zipLabel',previewPass?'Очередь оригиналов':unavailable?'Серверный ZIP отключён':inFlight?(z.stage==='verifying'?'Проверка ZIP':'Скачивание ZIP'):deferred?'ZIP отложен':queued?'Накопление ZIP':'ZIP сохранены');
  text('zipValue',inFlight?'пачка '+z.batch+' / '+z.batches:queued?fmt(queued)+(queued<500&&!deferred?' / '+(z.batch_size||500):' в очереди'):fmt(z.archives));
  hide('zipBar',unavailable||previewPass||!queued||inFlight||deferred);$('zipBar').max=z.batch_size||500;$('zipBar').value=Math.min(queued,z.batch_size||500);
  let detail=deferred?(d.phase==='rate_limited'?'Очередь сохранена · после ограничения Яндекса':'Очередь сохранена · следующая фоновая проверка'):z.archives?fmt(z.imported)+' оригиналов из ZIP'+(z.missing?' · '+fmt(z.missing)+' пропусков на повторную проверку':''):queued>=500?'Пачка готова · архивы скачиваются по очереди':'';
- if(previewPass&&queued)detail='После прохода превью всех файлов';
+
  if(unavailable)detail='Яндекс: MPFS 394 · оригиналы загружаются отдельно';
  text('zipDetail',detail);hide('zipDetail',!detail);
 }
@@ -74,7 +73,7 @@ function render(d){
 	 document.querySelectorAll('.tempo,.forecast').forEach(node=>node.hidden=!active);document.querySelector('.headline').classList.toggle('inactive',!active);hide('speedScope',!active);
  text('connection','● live');$('connection').className='connection';text('out',d.out);$('out').title=d.out;
  text('phase',phases[d.phase]||d.phase);$('dot').className='dot '+(paused||d.phase==='attention'?'paused':active?'':'idle');
- text('stageNote',active?'':d.watching?'следующая проверка '+dateTime(d.next_check)+' МСК':'');
+ text('stageNote',active?'':d.watching?'непрерывная загрузка включена':'');
  let notice=paused?'HTTP 429 · общая пауза до '+time(r.limited_until)+' МСК · '+r.interval_ms+' мс между запросами':d.phase==='attention'?d.message:'';
  text('notice',notice);hide('notice',!notice);
  text('done',fmt(s.done));text('total',fmt(confirmed));text('percent',confirmed?fmt(s.done/confirmed*100,1)+'%':'');$('bar').max=Math.max(confirmed,1);$('bar').value=s.done;
@@ -89,21 +88,26 @@ function render(d){
  for(const [id,key] of [['hasOriginal','original'],['hasPreview','preview'],['hasThumbnail','thumbnail'],['noOriginal','no_original'],['noPreview','no_preview'],['noThumbnail','no_thumbnail']])text(id,fmt(s[key]));
  text('mediaSize',bytes(s.bytes));text('folderSize',d.storage?.updated?(d.storage.partial?'≈ ':'')+bytes(d.storage.folder_bytes):'Замер…');text('diskFree',d.storage?.updated?bytes(d.storage.volume_free_bytes):'—');hide('spaceLine',!d.storage?.updated);
  hide('rateLine',!active||paused);text('rateStatus',rateText(d));
- hide('watchLine',!d.watching);text('watchValue','каждые '+interval(d.watch_interval_minutes));text('watchNext',active?'Следующий запуск — после текущего прохода':'Следующий запуск '+dateTime(d.next_check)+' МСК');
+ const live=d.live||{};
+ hide('workerLine',!active||!live.workers);
+ text('previewQueue',fmt(live.previews)+' задач · '+fmt(live.preview_workers)+' ворк.');
+ text('originalQueue',fmt(live.originals)+' задач · '+fmt(live.original_workers)+' ворк.');
+ text('retryQueue',live.retrying?fmt(live.retrying)+' версий ждут повторной попытки'+(live.next_retry?' · ближайшая '+time(live.next_retry):''):'');hide('retryQueue',!live.retrying);
+ hide('watchLine',!active);text('watchValue',live.inventory_running?'обновляется':'каждые 30 мин');text('watchNext',live.inventory_running?'Скачивание продолжается':live.next_inventory_check?'Следующее обновление '+dateTime(live.next_inventory_check)+' МСК':'Ожидание списка кластеров');
+ $('zipEnabled').checked=Boolean(d.zip_enabled);$('zipEnabled').disabled=mutation;
  hide('stop',!active);hide('start',active||!d.cookies||s.total>0);hide('resume',active||!d.cookies||!s.total||s.done===confirmed&&!missing&&s.inventory==='complete');hide('goSetup',d.cookies);
  for(const id of ['start','resume','stop','check','upgrade','zip','tune','rescan','watch'])$(id).disabled=mutation;
  const needsAccess=!d.cookies||d.phase==='attention'&&/сесси|CAPTCHA|cookies|авториз/i.test(d.message||'');
- hide('connectedAccess',needsAccess);hide('cookieForm',!needsAccess&&!replaceAccess);hide('replaceCookies',active);$('cookiesFile').disabled=active||mutation;hide('check',!d.cookies||active);hide('zipAction',active||!d.cookies||!s.no_original);hide('rescan',active||!d.cookies||s.inventory!=='incomplete');
+ hide('connectedAccess',needsAccess);hide('cookieForm',!needsAccess&&!replaceAccess);hide('replaceCookies',active);$('cookiesFile').disabled=active||mutation;hide('check',!d.cookies||active);hide('zipAction',true);hide('rescan',active||!d.cookies||s.inventory!=='incomplete');
  $('upgrade').disabled=active||!d.cookies||!missing||mutation;$('watch').disabled=!d.cookies||!s.total||!missing&&!d.watching||mutation;text('watch',d.watching?'Выключить':'Включить');
-	 hide('upgrade',active||!d.cookies||!missing);hide('tune',!active);
+	 hide('upgrade',true);hide('tune',!active);
 	 $('watchStatus').closest('.panel').hidden=!s.total||!missing&&!d.watching;$('tuneStatus').closest('.panel').hidden=!s.total;$('settingsOut').closest('.panel').hidden=!s.total;
- if(document.activeElement!==$('interval'))$('interval').value=String(d.watch_interval_minutes);
- text('watchStatus',d.watching?active?'Включена · после завершения текущего прохода':'Включена · следующий запуск '+dateTime(d.next_check)+' МСК':'Выключена');
+ text('watchStatus',d.watching?'Включена · работает постоянно до получения всех версий':'Выключена');
  $('tune').disabled=!active||mutation;text('tune',a?.state==='probing'?'Остановить подбор':'Подбирать RPS');
  text('tuneStatus',a?.state==='probing'?'Проверяется '+a.test_interval_ms+' мс · '+Math.round(a.elapsed_seconds)+' / '+a.step_seconds+' с':rateText(d)+(a?.state==='bounded'?' · разгон остановлен после 429':''));
  hide('rateHistory',!a?.trials?.length);text('tuneResults',(a?.trials||[]).map(row=>String(row.interval_ms).padStart(4)+' мс  '+fmt(row.rps,2).padStart(6)+' RPS  '+(row.limited?'429':'✓')).join('\n'));
  text('settingsOut',d.out);text('archiveCount',fmt(s.archive_files??s.archives)+(s.zip_archives?' · пакетных '+fmt(s.zip_archives):''));
- text('footerStatus',d.watching?'качество: авто · '+interval(d.watch_interval_minutes):'прогресс сохранён в SQLite');
+ text('footerStatus',d.watching?'загрузка: непрерывно · каталог: 30 мин':'прогресс сохранён в SQLite');
  const filters={'original-best':s.original,'missing-original':s.no_original,'missing-preview':s.no_preview,'missing-thumbnail':s.no_thumbnail,'no-copy':noCopy,saved:s.done,unconfirmed,'records-all':s.records??s.total,failed:s.failed,pending:s.pending,'preview-best':s.only_preview,'thumbnail-best':s.only_thumbnail};
  for(const option of $('filter').options)option.hidden=option.value!=='all'&&filters[option.value]===0&&option.value!==$('filter').value;
  renderJournal();
@@ -137,8 +141,8 @@ $('goSetup').addEventListener('click',()=>switchView('settings'));
 $('replaceCookies').addEventListener('click',()=>{replaceAccess=true;hide('cookieForm',false);$('cookiesFile').focus()});
 $('cookiesFile').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;const body=new FormData();body.append('cookies',file);text('fileLabel',file.name);await action('/api/cookies',body)});
 for(const [id,path] of [['start','start'],['rescan','start'],['stop','stop'],['check','check'],['upgrade','upgrade'],['resume','resume'],['zip','zip']])$(id).addEventListener('click',()=>action('/api/'+path));
-$('watch').addEventListener('click',()=>action('/api/watch',{enabled:!snapshot?.watching,interval_minutes:Number($('interval').value)},true));
-$('interval').addEventListener('change',()=>{if(snapshot?.watching)action('/api/watch',{enabled:true,interval_minutes:Number($('interval').value)},true)});
+$('watch').addEventListener('click',()=>action('/api/watch',{enabled:!snapshot?.watching},true));
+$('zipEnabled').addEventListener('change',event=>action('/api/settings',{zip_enabled:event.target.checked},true));
 $('tune').addEventListener('click',()=>action('/api/rate-tune',{enabled:snapshot?.rate?.tune?.state!=='probing'},true));
 $('filter').addEventListener('change',()=>{offset=0;lastList=0;loadFiles()});$('prevPage').addEventListener('click',()=>{offset=Math.max(0,offset-pageSize);loadFiles()});$('nextPage').addEventListener('click',()=>{offset+=pageSize;loadFiles()});
 $('importantOnly').addEventListener('change',renderJournal);

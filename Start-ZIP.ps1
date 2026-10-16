@@ -4,6 +4,7 @@ $endpoint = [Uri]$Service
 if (-not $endpoint.IsLoopback -or $endpoint.Scheme -ne 'http') { throw 'Нужен адрес локального сервиса.' }
 $status = Invoke-RestMethod -Uri "$Service/api/status" -TimeoutSec 10
 $headers = @{'X-Backup-Token' = $status.token}
+if (-not $status.zip_enabled) { throw 'Серверный ZIP выключен. Сначала включи его в настройках WebUI.' }
 if ($status.running) {
     Write-Host 'Останавливаю текущую очередь. Сохранённые версии остаются на месте.'
     Invoke-RestMethod -Uri "$Service/api/stop" -Method Post -Headers $headers -TimeoutSec 10 | Out-Null

@@ -39,7 +39,10 @@ type Cookie struct {
 	HostOnly   bool    `json:"hostOnly"`
 }
 type Client struct {
-	WebDAVToken        string // loaded from a local file; never exposed in status or logs
+	Continuous         bool
+	ZIPEnabled         atomic.Bool
+	live               *liveQueue // guarded by mu
+	WebDAVToken        string     // loaded from a local file; never exposed in status or logs
 	WebDAVBase         string
 	RESTBase           string
 	webDAVRejected     atomic.Bool
